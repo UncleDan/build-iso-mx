@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=LXQt (Wayland)
+Comment=LXQt session on Wayland, with labwc as compositor
+Exec=labwc
+TryExec=labwc
+Type=Application
+DesktopNames=LXQt
+Keywords=wayland;labwc;lxqt;

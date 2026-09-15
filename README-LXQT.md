@@ -41,8 +41,21 @@ window_manager=openbox
 compositor=labwc
 ```
 
-`lxqt-wayland-session` provides the "LXQt (Wayland)" entry in SDDM and the
-labwc defaults. Autologin in the live session uses `lxqt.desktop` (X11).
+**`lxqt-wayland-session` is not in trixie** (forky/sid only, 0.3.1), so this
+flavour ships the three files it would have installed:
+
+* `/usr/share/wayland-sessions/lxqt-labwc.desktop` — the "LXQt (Wayland)"
+  entry in SDDM, `Exec=labwc`, `DesktopNames=LXQt`
+* `~/.config/labwc/autostart` — `lxqt-session && labwc --exit`, the line
+  upstream requires so that ending the session also stops the compositor
+* `~/.config/labwc/environment` — `XDG_CURRENT_DESKTOP=LXQt` and the Qt
+  Wayland platform
+
+The `compositor=labwc` key in `session.conf` is read by `startlxqtwayland`
+from that package: inert today, correct as soon as it reaches trixie, at
+which point the three files above can be dropped.
+
+Autologin in the live session uses `lxqt.desktop` (X11).
 
 ## Login screen
 

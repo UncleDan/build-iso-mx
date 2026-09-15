@@ -162,7 +162,9 @@ qterminal             #replaces konsole + yakuake (built-in drop-down mode)
 openbox
 obconf-qt
 labwc
-lxqt-wayland-session  #provides the "LXQt (Wayland)" session + labwc defaults
+#lxqt-wayland-session  NOT IN TRIXIE (forky/sid only). The Wayland session is
+#                      provided by Themes/mxlxqt instead: a wayland-sessions
+#                      desktop entry plus labwc autostart/environment files.
 
 #--- shell components replaced by LXQt counterparts (all Qt) --------------
 nm-tray               #replaces plasma-nm
@@ -269,6 +271,8 @@ __userfile__=true
 # X11 session -> Openbox ; Wayland session -> labwc.
 # Both live in this one file: there is no separate wayland-session.conf.
 window_manager=openbox
+# Read by startlxqtwayland from lxqt-wayland-session, which is not in trixie
+# yet (forky/sid only). Harmless now, correct as soon as it lands.
 compositor=labwc
 leave_confirmation=true
 
@@ -323,6 +327,34 @@ cat > Themes/mxlxqt/skel-config/labwc/rc.xml <<'EOF'
     <cornerRadius>4</cornerRadius>
   </theme>
 </labwc_config>
+EOF
+
+# Wayland session entry, replacing the one lxqt-wayland-session would install.
+# Upstream requires the compositor autostart to run "lxqt-session && <exit>",
+# so that closing the LXQt session also stops labwc.
+cat > Themes/mxlxqt/misc/lxqt-labwc.desktop <<'EOF'
+[Desktop Entry]
+Name=LXQt (Wayland)
+Comment=LXQt session on Wayland, with labwc as compositor
+Exec=labwc
+TryExec=labwc
+Type=Application
+DesktopNames=LXQt
+Keywords=wayland;labwc;lxqt;
+EOF
+
+cat > Themes/mxlxqt/skel-config/labwc/autostart <<'EOF'
+#!/bin/sh
+# Starting point of the LXQt Wayland session: lxqt-session runs the desktop,
+# and labwc exits as soon as the session ends.
+lxqt-session && labwc --exit
+EOF
+
+cat > Themes/mxlxqt/skel-config/labwc/environment <<'EOF'
+XDG_CURRENT_DESKTOP=LXQt
+XDG_SESSION_DESKTOP=LXQt
+QT_QPA_PLATFORM=wayland;xcb
+QT_WAYLAND_DISABLE_WINDOWDECORATION=1
 EOF
 
 cat > Themes/mxlxqt/skel-config/pcmanfm-qt/lxqt/settings.conf <<'EOF'
@@ -386,6 +418,8 @@ copy_dir  skel-config/          /etc/skel/.config/          --create
 # Conky ships with Hidden=true: re-enable with conky-toggle-mx, with MX Tweak,
 # or by ticking Conky in LXQt Session Settings > Autostart.
 copy_file conky.desktop         /etc/skel/.config/autostart/ --create
+copy_file lxqt-labwc.desktop    /usr/share/wayland-sessions/ --create
+chmod 0755 "${PREFIX%/}/etc/skel/.config/labwc/autostart"
 
 #---------------------------------------------------------------------------
 # Resolve the themes that actually exist in this build instead of guessing.

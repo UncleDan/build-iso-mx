@@ -216,7 +216,9 @@ qterminal             #replaces konsole + yakuake (built-in drop-down mode)
 openbox
 obconf-qt
 labwc
-lxqt-wayland-session  #provides the "LXQt (Wayland)" session + labwc defaults
+#lxqt-wayland-session  NOT IN TRIXIE (forky/sid only). The Wayland session is
+#                      provided by Themes/mxlxqt instead: a wayland-sessions
+#                      desktop entry plus labwc autostart/environment files.
 
 #--- shell components replaced by LXQt counterparts (all Qt) --------------
 nm-tray               #replaces plasma-nm

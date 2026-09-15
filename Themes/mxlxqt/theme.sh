@@ -26,6 +26,8 @@ copy_dir  skel-config/          /etc/skel/.config/          --create
 # Conky ships with Hidden=true: re-enable with conky-toggle-mx, with MX Tweak,
 # or by ticking Conky in LXQt Session Settings > Autostart.
 copy_file conky.desktop         /etc/skel/.config/autostart/ --create
+copy_file lxqt-labwc.desktop    /usr/share/wayland-sessions/ --create
+chmod 0755 "${PREFIX%/}/etc/skel/.config/labwc/autostart"
 
 #---------------------------------------------------------------------------
 # Resolve the themes that actually exist in this build instead of guessing.
