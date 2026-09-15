@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# prepare-build-host.sh - v2 (2026-09-12)
+# prepare-build-host.sh - v3 (2026-09-15)
 #
 # Prepare a MINIMAL, HEADLESS Debian 13 "trixie" host (accessed over SSH) to
 # run MX's build-iso, e.g. for the mxlxqt flavour:
@@ -21,6 +21,13 @@
 #   * Optional apt-cacher-ng proxy (--proxy), which also caches the host-side
 #     debootstrap and survives a wiped Remaster.
 #
+# NEW IN v3: gnupg. build-iso has SIGN_FILES="true" in Input/defaults-system
+#   and signs the ISO with "gpg --detach-sign". A minimal Debian ships no gpg
+#   at all, and build-iso runs as root, so the key has to be in ROOT's keyring
+#   (/root/.gnupg): a key created by your normal user is invisible to it.
+#   This script installs gnupg, checks for a root secret key, and offers both
+#   ways out: --no-sign (disable signing) or --sign-key (create one).
+#
 # USAGE:
 #   sudo ./prepare-build-host.sh                  # install + verify + caches
 #   sudo ./prepare-build-host.sh --check          # verify only, install nothing
@@ -28,6 +35,9 @@
 #   sudo ./prepare-build-host.sh --proxy          # local apt-cacher-ng
 #   sudo ./prepare-build-host.sh --proxy=http://10.0.0.5:3142
 #                                                 # existing proxy on the LAN
+#   sudo ./prepare-build-host.sh --no-sign        # SIGN_FILES="false"
+#   sudo ./prepare-build-host.sh --sign-key="MX builder <me@example.org>"
+#                                                 # root signing key, no passphrase
 #
 
 set -Eeuo pipefail
@@ -36,6 +46,8 @@ CHECK_ONLY=false
 REMASTER_TARGET=""
 PROXY_MODE=false
 PROXY_URL=""
+NO_SIGN=false
+SIGN_KEY=""
 BUILD_DIR="$PWD"
 
 for arg in "$@"; do
@@ -44,6 +56,8 @@ for arg in "$@"; do
         --remaster=*) REMASTER_TARGET="${arg#*=}" ;;
         --proxy)      PROXY_MODE=true ;;
         --proxy=*)    PROXY_MODE=true; PROXY_URL="${arg#*=}" ;;
+        --no-sign)    NO_SIGN=true ;;
+        --sign-key=*) SIGN_KEY="${arg#*=}" ;;
         --help|-h)    sed -n '2,30p' "$0"; exit 0 ;;
         /*)           REMASTER_TARGET="$arg" ;;
         *)            ;;
@@ -102,6 +116,7 @@ PACKAGES=(
     rsync                # file collection
     sudo
     ca-certificates      # https apt sources inside the chroot
+    gnupg                # gpg --detach-sign of the finished ISO (SIGN_FILES)
     pigz                 # GZIP_PROGS (falls back to gzip)
     xz-utils lz4 zstd    # squashfs compression choices
     bc
@@ -129,7 +144,7 @@ fi
 REQUIRED_PROGS=(
     chroot isohybrid mksquashfs md5sum sudo tee zsync pkill expand strings
     iconv unbuffer debootstrap apt-get dpkg grub-mkrescue xorriso unshare
-    mount umount find mktemp mkfs.vfat mcopy mformat
+    mount umount find mktemp mkfs.vfat mcopy mformat gpg
 )
 
 log "Required programs"
@@ -226,6 +241,53 @@ EOF
 fi
 
 # ---------------------------------------------------------------------------
+# 6. ISO signing
+# ---------------------------------------------------------------------------
+# build-iso runs as root, so "gpg --detach-sign" reads /root/.gnupg. A key in
+# your own ~/.gnupg is NOT used, which is why "gpg --list-secret-keys" can look
+# empty even right after installing gnupg.
+log "ISO signing"
+DEFAULTS_LOCAL="$BUILD_DIR/Input/defaults-local"
+
+if $NO_SIGN; then
+    if $CHECK_ONLY; then
+        warn "--check: would set SIGN_FILES=\"false\" in Input/defaults-local"
+    elif [ -d "$BUILD_DIR/Input" ]; then
+        if grep -q '^SIGN_FILES=' "$DEFAULTS_LOCAL" 2>/dev/null; then
+            sed -i 's|^SIGN_FILES=.*|SIGN_FILES="false"|' "$DEFAULTS_LOCAL"
+        else
+            printf 'SIGN_FILES="false"\n' >> "$DEFAULTS_LOCAL"
+        fi
+        ok "signing disabled in $DEFAULTS_LOCAL (read last, overrides --user-default)"
+    else
+        warn "Input/ not found here; add SIGN_FILES=\"false\" to Input/defaults-local yourself"
+    fi
+elif [ -n "$SIGN_KEY" ]; then
+    if $CHECK_ONLY; then
+        warn "--check: would create a root signing key for $SIGN_KEY"
+    elif gpg --list-secret-keys --with-colons 2>/dev/null | grep -q '^sec'; then
+        ok "root already has a secret key; leaving it alone"
+    else
+        # Unattended build host: no passphrase, otherwise every build stops to
+        # ask for it. The key only signs public ISOs.
+        gpg --batch --pinentry-mode loopback --passphrase '' \
+            --quick-generate-key "$SIGN_KEY" default default never
+        ok "created a root signing key for $SIGN_KEY"
+        printf '   export it with: gpg --armor --export "%s" > builder.pub\n' "$SIGN_KEY"
+    fi
+else
+    if gpg --list-secret-keys --with-colons 2>/dev/null | grep -q '^sec'; then
+        ok "root has a secret key: the ISO will be signed"
+    else
+        warn "root has NO secret key, so build-iso's signing step will fail"
+        warn "(the ISO itself is still produced; only the .sig is missing)"
+        printf '   fix it either way:\n'
+        printf '     sudo %s --no-sign\n' "$(basename "$0")"
+        printf '     sudo %s --sign-key="Your Name <you@example.org>"\n' "$(basename "$0")"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # 6. Result
 # ---------------------------------------------------------------------------
 echo
@@ -247,6 +309,10 @@ connection would kill it mid-chroot, leaving bind mounts behind.
   tmux new -s iso        # start
   Ctrl+b d               # detach
   tmux attach -t iso     # come back
+
+Signing: build-iso signs the ISO as root. If the .sig is missing, root has no
+key - see the "ISO signing" section above. A missing signature never
+invalidates the ISO itself.
 
 Caching: leave Remaster/deb-cache and Remaster/cache alone between builds -
 they are what makes the second build fast. Clearing Remaster/iso-files and
