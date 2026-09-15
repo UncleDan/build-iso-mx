@@ -1,0 +1,195 @@
+# MX LXQt flavour (mxlxqt)
+
+LXQt respin of the MX 25.x KDE edition, built by duplicating the KDE flavour
+and replacing Plasma with LXQt 2.1: **Openbox on X11, labwc on Wayland**.
+
+Only the Plasma *shell* is replaced. LXQt is Qt too, and KDE Connect keeps KDE
+Frameworks 6 installed regardless, so the KDE application and theming stack is
+kept on purpose and **no GTK application is used as a replacement**.
+
+Base: Debian 13 *trixie* (MX 25.3), kernel 6.12, AHS repositories enabled.
+
+## Build
+
+```bash
+sudo ./build-iso --user-default defaults-lxqt        # systemd
+sudo ./build-iso --user-default defaults-lxqt-sysv   # sysVinit
+```
+
+The theme (`mxlxqt`) is selected automatically by the defaults file, so the
+theme prompt can be skipped.
+
+## What was added
+
+| Path | Origin |
+|---|---|
+| `Input/defaults-lxqt`, `Input/defaults-lxqt-sysv` | copies of `defaults-kde*` |
+| `Template/mxlxqt/`, `Template/mxlxqt-sysv/` | copies of `Template/mxkde*` |
+| `Themes/mxlxqt/` | copy of `Themes/mxkde` |
+
+Nothing in the KDE flavour was modified, and no registration elsewhere is
+needed: `build-iso` discovers flavours and themes from the directory tree.
+
+## Sessions
+
+Both window managers are configured in the *same* file,
+`/etc/skel/.config/lxqt/session.conf` — there is no `wayland-session.conf`:
+
+```ini
+[General]
+window_manager=openbox
+compositor=labwc
+```
+
+`lxqt-wayland-session` provides the "LXQt (Wayland)" entry in SDDM and the
+labwc defaults. Autologin in the live session uses `lxqt.desktop` (X11).
+
+## Login screen
+
+Deliberately unchanged: `sddm`, `sddm-theme-breeze`, `breeze-cursor-theme`
+and `mx25-artwork` are still installed, and `Themes/mxlxqt/misc/sddm.conf`
+keeps `Theme/Current=monochrome` and `CursorTheme=breeze_cursors`. Only the
+autologin session name differs from the KDE flavour.
+
+## Conky
+
+Shipped **disabled**: `Themes/mxlxqt/misc/conky.desktop` carries
+`Hidden=true` and is copied to `/etc/skel/.config/autostart/`.
+`mx-conky` and `conky-toggle-mx` are still installed, so it can be turned
+back on with `conky-toggle-mx`, from MX Tweak, or by ticking Conky in
+LXQt Session Settings → Autostart.
+
+## Replacements (Qt only)
+
+| KDE shell component | LXQt |
+|---|---|
+| plasma-workspace, kwin-x11, kwin-wayland | lxqt-session + openbox (X11) / labwc (Wayland) |
+| plasma-desktop, dolphin (desktop icons) | pcmanfm-qt |
+| konsole, yakuake | qterminal (built-in drop-down mode) |
+| plasma-nm | nm-tray |
+| plasma-pa, pavucontrol | pavucontrol-qt |
+| bluedevil | blueman (the one GTK exception, see below) |
+| powerdevil | lxqt-powermanagement |
+| polkit-kde-agent-1 | lxqt-policykit |
+| systemsettings, kscreen | lxqt-config |
+| plasma-systemmonitor | qps |
+| kde-spectacle | screengrab |
+| gwenview | lximage-qt (qimgv also kept) |
+| kate | featherpad |
+| kcalc | speedcrunch |
+| filelight | qdirstat |
+| ark | lxqt-archiver |
+| plasma-discover | mx-packageinstaller (Qt, from mx-apps) |
+| xdg-desktop-portal-kde | xdg-desktop-portal-lxqt |
+| kmail / kontact | thunderbird |
+| mx-apps-kde | mx-apps |
+
+Every replacement above is Qt. Where the only lighter alternative would have
+been GTK, the KDE application is kept instead: **okular** (not qpdfview, which
+is still Qt5), **k3b** (not xfburn), **partitionmanager** (not gparted),
+**skanpage** (not simple-scan) and **mx-packageinstaller** (not synaptic).
+
+The single exception is Bluetooth: **blueman** is GTK, but no standalone Qt
+bluetooth manager exists. bluedevil is a Plasma applet plus a kded6 module, so
+outside Plasma it would mean a resident daemon for a partial interface
+reachable only through `kcmshell6 kcm_bluetooth`. Blueman runs standalone,
+provides a real tray applet under both Openbox and labwc, and autostarts from
+its own `/etc/xdg/autostart/blueman.desktop`. Lubuntu ships it for the same
+reason. GTK3 is in the ISO regardless (GIMP, Firefox, pdfarranger).
+
+`gvfs` is kept because libfm-qt uses it for mounts, trash and network shares.
+It is a background glib service, not a GTK application; the KDE applications
+keep using KIO.
+
+Package count: 309 -> 225 (systemd flavour).
+
+## Kept on purpose
+
+* **kdeconnect** — no equivalent anywhere. It keeps KDE Frameworks 6
+  installed, which is why `kdeglobals` is shipped rather than dropped: KF6
+  applications read it for colours, fonts and the icon theme. Because there is
+  no Plasma applet outside Plasma,
+  `/etc/skel/.config/autostart/kdeconnect-indicator.desktop` starts the
+  standalone tray indicator. Allow TCP+UDP 1714-1764 in the firewall.
+* **The Breeze stack** — `breeze`, `kde-style-breeze`, `breeze-icon-theme`,
+  `breeze-cursor-theme`, `breeze-gtk-theme`. The Qt widget style is
+  `Breeze`, the icon theme `breeze-dark`, the cursor `breeze_cursors`: the
+  same look the SDDM login screen uses, so login and desktop match.
+* **frameworkintegration** — this is what makes Qt applications outside
+  Plasma honour `kdeglobals`. Without it the KDE applications fall back to
+  their own defaults and the desktop looks inconsistent.
+* **kio, kio-extras, kded6, kde-cli-tools** — KIO for the KDE applications
+  that stayed.
+* **thunderbird**, **qbittorrent**, **vlc**, **gimp**, **libreoffice** —
+  unchanged from the KDE flavour (`libreoffice-kf6` and `libreoffice-plasma`
+  dropped, `libreoffice-qt6` kept).
+
+## Theming: /etc/skel/.config
+
+| File | Purpose |
+|---|---|
+| `lxqt/session.conf` | `window_manager=openbox`, `compositor=labwc`, cursor theme |
+| `lxqt/lxqt.conf` | LXQt theme `kde-plasma`, icons, Qt style `Breeze` |
+| `kdeglobals` | colour scheme, icon theme and widget style for every KF6 app |
+| `openbox/lxqt-rc.xml`, `labwc/rc.xml` | window decorations |
+| `pcmanfm-qt/lxqt/settings.conf` | desktop wallpaper |
+| `autostart/` | KDE Connect indicator, nm-tray, Conky (`Hidden=true`) |
+
+## Build-time theme resolution
+
+`Themes/mxlxqt/theme.sh` does not hardcode names that may not exist in the
+chroot. After copying the skeleton it detects, inside the built system:
+
+* the Qt widget style — `Breeze` if `qt6/plugins/styles/breeze*.so` is there,
+  otherwise `Fusion`, written to both `lxqt.conf` and `kdeglobals`;
+* the icon theme, preferring KDE's `breeze-dark` and falling back to
+  `Papirus-mxblue`, again written to both files so the panel and the KF6
+  applications agree;
+* the colour scheme: a KDE `.colors` file *is* a `kdeglobals` fragment, so
+  `BreezeDark.colors` is merged into `kdeglobals`. Setting only
+  `ColorScheme=BreezeDark` would have left Breeze in its light variant;
+* an Openbox-style decoration theme in `/usr/share/themes/*/openbox-3`
+  (Breeze first), substituted into both `openbox/lxqt-rc.xml` and
+  `labwc/rc.xml`;
+* the largest MX wallpaper under `/usr/share/backgrounds`.
+
+Each decision is echoed in the build log.
+
+## Check before the first build
+
+Package names were taken from Debian trixie and from the existing MX lists in
+this tree. Confirm the ones MX does not already ship in another flavour:
+
+```bash
+PKGS="lxqt-core lxqt-wayland-session labwc openbox obconf-qt nm-tray \
+pavucontrol-qt qps speedcrunch qdirstat screengrab lximage-qt \
+lxqt-archiver featherpad mx-apps pcmanfm-qt qterminal \
+xdg-desktop-portal-lxqt blueman k3b skanpage partitionmanager okular"
+
+for p in $PKGS; do
+    cand=$(apt-cache policy "$p" 2>/dev/null | awk -F': *' '/Candidate:/{print $2}')
+    [ -z "$cand" ] || [ "$cand" = "(none)" ] && printf 'MISSING: %s\n' "$p"
+done
+
+# Stronger check: also catches conflicts and unsatisfiable dependencies.
+sudo apt-get install -s $PKGS | tail -30
+```
+
+A package that does not exist at all prints *nothing* — `apt-cache policy`
+only reports `Candidate: (none)` for a package it knows about. Testing the
+empty case is what catches a name that was invented rather than mistyped.
+
+These commands query the repositories of the machine you run them on, not the
+ones the chroot will use: check that
+`Template/mxlxqt/squashfs/etc/apt/sources.list.d/mx.sources` points at the
+same repositories (AHS included).
+
+`mx-apps` is the generic MX tools metapackage used by the Xfce flavour; there
+is no `mx-apps-lxqt`.
+
+## Known Wayland limitations (upstream)
+
+`lxqt-globalkeys`, `lxqt-config-input` and `lxqt-config-monitor` do not work
+under labwc: shortcuts, input devices and outputs are configured in
+`~/.config/labwc/rc.xml`. The panel's workspace-switcher plugin is limited.
+The X11/Openbox session has none of these limitations.

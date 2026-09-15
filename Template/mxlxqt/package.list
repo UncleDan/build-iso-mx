@@ -1,0 +1,259 @@
+#mx-viewer
+alsa-topology-conf
+alsa-ucm-conf
+appstream
+apt-config-icons
+apt-config-icons-large
+aptitude
+aptitude-common
+arc-theme
+aspell
+aspell-en
+bash-config
+bluetooth
+bluez
+bluez-cups
+bluez-tools
+breeze
+breeze-cursor-theme
+breeze-gtk-theme
+breeze-icon-theme
+ca-certificates-java
+catdoc
+cdparanoia
+colord
+colord-data
+command-not-found
+conky-all
+conky-toggle-mx
+cracklib-runtime
+dbus-user-session
+dh-python
+docbook-xsl
+flac
+flatpak
+foliate
+fonts-noto-color-emoji
+fonts-vlgothic #Japanese
+fonts-wqy-microhei #Chinese
+formatusb
+frameworkintegration
+fsearch
+gcc-14-base:i386
+gdb-minimal
+gimp
+gimp-data
+git
+gnupg-agent
+gsfonts
+gstreamer1.0-plugins-bad
+gstreamer1.0-pulseaudio
+heif-gdk-pixbuf
+heif-thumbnailer
+hicolor-icon-theme
+hunspell-en-gb
+hunspell-en-us
+ibus-table-emoticon
+icedax
+icoutils
+ieee-data
+iptraf-ng
+java-common
+javascript-common
+job-scheduler
+k3b
+kde-cli-tools
+kde-cli-tools-data
+kde-style-breeze
+kdeconnect
+kded6
+kimageformat-plugins
+kio
+kio-extras
+kio-extras-data
+lame
+libc6:i386
+libcanberra-gstreamer
+libcanberra-gtk3-module
+libcanberra-pulse
+libffmpegthumbnailer4v5
+libgcc-s1:i386
+libreoffice-base
+libreoffice-base-core
+libreoffice-calc
+libreoffice-common
+libreoffice-core
+libreoffice-draw
+libreoffice-help-en-us
+libreoffice-impress
+libreoffice-java-common
+libreoffice-math
+libreoffice-qt6
+libreoffice-report-builder-bin
+libreoffice-sdbc-hsqldb
+libreoffice-style-sifr
+libreoffice-writer
+linux-headers-amd64
+linux-image-amd64
+lo-main-helper
+manpages-dev
+media-player-info
+mesa-vulkan-drivers
+mx-cleanup
+mx-conky
+mx-conky-data
+mx-docs
+mx-installer
+mx-live-usb-maker
+mx-network-assistant
+mx-select-sound
+mx-sound-theme-borealis
+mx-sound-theme-fresh-and-clean
+mx-tour
+mx-welcome
+mx25-artwork
+mythes-en-us
+okular
+okular-extra-backends
+open-vm-tools
+packagekit
+packagekit-tools
+pacpl
+papirus-mxblue
+partitionmanager
+pdfarranger
+peg-e
+phonon-backend-gstreamer-common
+phonon4qt6
+pinentry-qt
+plymouth
+plymouth-themes
+plymouth-themes-mx
+plymouth-x11
+poppler-data
+poppler-utils
+power-profiles-daemon
+pulseaudio-utils
+python3-gi-cairo
+python3-pycurl
+qbittorrent
+qdbus-qt6
+qimgv
+qml-module-qt-labs-folderlistmodel
+qml-module-qt-labs-settings
+qml-module-qtgraphicaleffects
+qml-module-qtmultimedia
+qml-module-qtqml-models2
+qml-module-qtquick-controls
+qml-module-qtquick-controls2
+qml-module-qtquick-dialogs
+qml-module-qtquick-layouts
+qml-module-qtquick-privatewidgets
+qml-module-qtquick-templates2
+qml-module-qtquick-virtualkeyboard
+qml-module-qtquick-window2
+qml-module-qtquick-xmllistmodel
+qml-module-qtquick2
+qml6-module-qtqml-xmllistmodel
+qt-heif-image-plugin
+qt6-gtk-platformtheme
+qt6-image-formats-plugins
+qtvirtualkeyboard-plugin
+rdesktop
+rtl8812au-dkms
+rtl8821cu-dkms
+sddm
+sddm-theme-breeze
+sendemail
+signon-plugin-oauth2
+skanpage
+sonnet6-plugins
+sound-theme-freedesktop
+sox
+strawberry
+system-config-printer
+systemd-cryptsetup
+thunderbird
+timeshift
+unar
+uno-libs-private
+ure
+vcdimager
+vim
+vlc
+vlc-data
+vlc-l10n
+wayland-utils
+xdg-desktop-portal
+xserver-xorg-video-mach64
+xserver-xorg-video-tdfx
+xserver-xorg-video-trident
+
+#--------------------------------------------------------------------------
+# LXQt desktop. Only the Plasma *shell* is replaced: the KDE/Qt application
+# and theming stack stays, because LXQt is Qt as well and KDE Connect keeps
+# KDE Frameworks 6 installed anyway (hence kdeglobals is kept too).
+# No GTK application is used as a replacement.
+#--------------------------------------------------------------------------
+lxqt-core
+lxqt-about
+lxqt-archiver
+lxqt-config
+lxqt-globalkeys
+lxqt-menu-data
+lxqt-notificationd
+lxqt-openssh-askpass
+lxqt-panel
+lxqt-policykit        #replaces polkit-kde-agent-1
+lxqt-powermanagement  #replaces powerdevil
+lxqt-qtplugin
+lxqt-runner
+lxqt-session
+lxqt-sudo
+lxqt-themes
+pcmanfm-qt            #replaces dolphin, and draws the desktop
+qterminal             #replaces konsole + yakuake (built-in drop-down mode)
+
+#--- window manager (X11) and compositor (Wayland) ------------------------
+openbox
+obconf-qt
+labwc
+lxqt-wayland-session  #provides the "LXQt (Wayland)" session + labwc defaults
+
+#--- shell components replaced by LXQt counterparts (all Qt) --------------
+nm-tray               #replaces plasma-nm
+pavucontrol-qt        #replaces plasma-pa
+blueman               #replaces bluedevil: the only GTK exception, because no
+                      #standalone Qt bluetooth manager exists. bluedevil is a
+                      #Plasma applet + a kded6 module, so outside Plasma it
+                      #would cost a resident daemon for a partial UI.
+                      #Lubuntu ships blueman for the same reason.
+qps                   #replaces plasma-systemmonitor
+screengrab            #replaces kde-spectacle
+lximage-qt            #replaces gwenview
+featherpad            #replaces kate
+speedcrunch           #replaces kcalc
+qdirstat              #replaces filelight
+xdg-desktop-portal-lxqt   #replaces xdg-desktop-portal-kde
+mx-apps               #MX tools (Qt), replaces mx-apps-kde; mx-packageinstaller
+                      #takes over from plasma-discover
+
+#--- glib VFS used by libfm-qt for mounts, trash and network shares -------
+# (a background service, not a GTK application; the KDE apps keep using KIO)
+gvfs
+gvfs-backends
+gvfs-fuse
+
+#--------------------------------------------------------------------------
+# Kept from KDE on purpose -- Qt all the way down
+#--------------------------------------------------------------------------
+# breeze, kde-style-breeze, breeze-icon-theme, breeze-cursor-theme,
+#   breeze-gtk-theme      : the look, shared with the SDDM login screen
+# frameworkintegration    : makes non-Plasma Qt apps follow kdeglobals
+# kio, kio-extras, kded6, kde-cli-tools : KIO for the KDE applications below
+# okular, k3b, skanpage, partitionmanager : Qt, and every lighter
+#   alternative would have been GTK
+# kdeconnect              : no equivalent anywhere; keeps KF6 installed,
+#                           which is why kdeglobals must not be purged
+# thunderbird             : replaces kmail/kontact
+# sddm + sddm-theme-breeze: login screen stays visually identical

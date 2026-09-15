@@ -1,0 +1,3 @@
+desktop-defaults-mx-kde   #KDE-only defaults: must not be installed
+hspell
+sddm-modified-init

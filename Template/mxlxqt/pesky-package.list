@@ -1,0 +1,8 @@
+desktop-defaults-mx-kde   #KDE-only defaults: must not be installed
+hspell
+sddm-modified-init
+#init-diversity-stuff
+init-diversity-tools
+elogind-init-diversity
+sysvinit-init-diversity
+systemd-init-diversity
