@@ -52,6 +52,27 @@ with `mount | grep -E 'Remaster|chroot'` and unmount in reverse order.
 
 The ISO lands in `Remaster/iso-files/`, with its `.sha256` and `.zsync`.
 
+The file name carries a timestamp:
+
+```
+MX-25.3_LXQt_x64_20260915-2145.iso
+```
+
+It comes from `ISO_TIMESTAMP` in `Input/defaults-lxqt`, plus a two-line patch
+to `build-iso` (the two places where `iso_file` is composed). Comment the
+variable out for the plain `MX-25.3_LXQt_x64.iso`.
+
+The timestamp is applied to the file name only, never to `DISTRO_VERSION`.
+That variable also names `Output/<name>` and `Remaster/work/<name>`, so a
+value changing at every run would leave behind a multi-GB work directory per
+build and break resuming a build with `-from`. As a side effect, consecutive
+builds no longer overwrite each other, so `build-iso` stops asking whether to
+replace an existing output file — prune `Remaster/iso-files/` yourself.
+
+`Tools/make-lxqt-flavour.sh` re-applies the patch after a master update, and
+is idempotent: it checks for `ISO_TIMESTAMP` before touching `build-iso`, and
+aborts if it cannot patch both occurrences.
+
 ### 3. Signing
 
 `Input/defaults-system` sets `SIGN_FILES="true"`, so build-iso always tries
@@ -176,6 +197,7 @@ LXQt Session Settings → Autostart.
 | konsole, yakuake | qterminal (built-in drop-down mode) |
 | plasma-nm | nm-tray |
 | plasma-pa, pavucontrol | pavucontrol-qt |
+| kscreenlocker (in plasma-workspace) | xscreensaver (X11) + swaylock (Wayland) |
 | bluedevil | blueman (the one GTK exception, see below) |
 | powerdevil | lxqt-powermanagement |
 | polkit-kde-agent-1 | lxqt-policykit |
@@ -183,8 +205,9 @@ LXQt Session Settings → Autostart.
 | plasma-systemmonitor | qps |
 | kde-spectacle | screengrab |
 | gwenview | lximage-qt (qimgv also kept) |
+| okular | qpdfview |
+| skanpage | skanlite |
 | kate | featherpad |
-| kcalc | speedcrunch |
 | filelight | qdirstat |
 | ark | lxqt-archiver |
 | plasma-discover | mx-packageinstaller (Qt, from mx-apps) |
@@ -193,9 +216,20 @@ LXQt Session Settings → Autostart.
 | mx-apps-kde | mx-apps |
 
 Every replacement above is Qt. Where the only lighter alternative would have
-been GTK, the KDE application is kept instead: **okular** (not qpdfview, which
-is still Qt5), **k3b** (not xfburn), **partitionmanager** (not gparted),
-**skanpage** (not simple-scan) and **mx-packageinstaller** (not synaptic).
+been GTK, the KDE application is kept instead: **k3b** (not xfburn),
+**partitionmanager** (not gparted), **kcalc** (kept over speedcrunch, since
+KF6 is installed anyway) and **mx-packageinstaller** (not synaptic).
+
+Two KDE applications were traded for lighter Qt ones, the same way Lubuntu
+does: **qpdfview** instead of okular (Qt5, but it avoids dragging okular and
+its KIO/Kirigami stack in for reading a PDF) and **skanlite** instead of
+skanpage (same KSane backend, plain Qt widgets instead of the whole QML
+stack; skanpage is only worth it for multi-page PDF scanning with OCR).
+
+`kded6` and `kde-cli-tools` are deliberately *not* in the explicit list: they
+are support daemons that do little outside Plasma. If some dependency really
+needs them, apt installs them anyway — which is the point of not listing
+them.
 
 The single exception is Bluetooth: **blueman** is GTK, but no standalone Qt
 bluetooth manager exists. bluedevil is a Plasma applet plus a kded6 module, so
@@ -226,11 +260,34 @@ Package count: 309 -> 225 (systemd flavour).
 * **frameworkintegration** — this is what makes Qt applications outside
   Plasma honour `kdeglobals`. Without it the KDE applications fall back to
   their own defaults and the desktop looks inconsistent.
-* **kio, kio-extras, kded6, kde-cli-tools** — KIO for the KDE applications
-  that stayed.
+* **kio, kio-extras** — KIO for the KDE applications that stayed.
 * **thunderbird**, **qbittorrent**, **vlc**, **gimp**, **libreoffice** —
   unchanged from the KDE flavour (`libreoffice-kf6` and `libreoffice-plasma`
   dropped, `libreoffice-qt6` kept).
+
+## Pieces Plasma used to provide
+
+Purging `plasma-workspace` also removes things that are not applications and
+are easy to miss. Lubuntu 26.04 was used as the reference for what a working
+LXQt desktop needs:
+
+* **Screen lock** — kscreenlocker went with plasma-workspace, and LXQt has
+  none of its own: the "Lock screen" button exists but does nothing without an
+  external locker. `xscreensaver` covers X11, `swaylock` covers Wayland (an
+  X11 locker cannot lock a Wayland session). labwc binds `Super+L` to swaylock
+  in `rc.xml`.
+* **Compositor** — Openbox draws decorations and nothing else, so without
+  `picom` there are no shadows or transparency and tearing is possible,
+  especially in VMs. labwc composites by itself, so picom must NOT run there.
+* **Connection editor** — nm-tray is only a tray applet; VPN, static IP and
+  802.1X go through `nm-connection-editor`, which lives in the GTK package
+  `network-manager-gnome`. Lubuntu makes the same trade. Its own `nm-applet`
+  tray icon is disabled in `/etc/skel` so only the Qt one shows up.
+
+picom and xscreensaver must not start under Wayland, and a `.desktop` file
+cannot test that reliably (Exec quoting rules make it fragile), so both
+autostart entries call `/usr/local/bin/run-if-x11`, a three-line wrapper
+installed by `theme.sh`.
 
 ## Theming: /etc/skel/.config
 
@@ -241,7 +298,7 @@ Package count: 309 -> 225 (systemd flavour).
 | `kdeglobals` | colour scheme, icon theme and widget style for every KF6 app |
 | `openbox/lxqt-rc.xml`, `labwc/rc.xml` | window decorations |
 | `pcmanfm-qt/lxqt/settings.conf` | desktop wallpaper |
-| `autostart/` | KDE Connect indicator, nm-tray, Conky (`Hidden=true`) |
+| `autostart/` | KDE Connect indicator, nm-tray, picom and xscreensaver (X11 only), Conky and nm-applet (`Hidden=true`) |
 
 ## Build-time theme resolution
 
@@ -270,9 +327,10 @@ this tree. Confirm the ones MX does not already ship in another flavour:
 
 ```bash
 PKGS="lxqt-core labwc openbox obconf-qt nm-tray \
-pavucontrol-qt qps speedcrunch qdirstat screengrab lximage-qt \
+pavucontrol-qt qps qdirstat screengrab lximage-qt qpdfview skanlite \
 lxqt-archiver featherpad mx-apps pcmanfm-qt qterminal \
-xdg-desktop-portal-lxqt blueman k3b skanpage partitionmanager okular"
+xdg-desktop-portal-lxqt blueman k3b partitionmanager kcalc \
+xscreensaver swaylock picom network-manager-gnome"
 
 for p in $PKGS; do
     cand=$(apt-cache policy "$p" 2>/dev/null | awk -F': *' '/Candidate:/{print $2}')

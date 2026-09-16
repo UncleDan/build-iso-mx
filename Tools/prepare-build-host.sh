@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# prepare-build-host.sh - v3 (2026-09-15)
+# prepare-build-host.sh - v4 (2026-09-15)
 #
 # Prepare a MINIMAL, HEADLESS Debian 13 "trixie" host (accessed over SSH) to
 # run MX's build-iso, e.g. for the mxlxqt flavour:
@@ -27,6 +27,11 @@
 #   (/root/.gnupg): a key created by your normal user is invisible to it.
 #   This script installs gnupg, checks for a root secret key, and offers both
 #   ways out: --no-sign (disable signing) or --sign-key (create one).
+#
+# NEW IN v4: the helper tools used around the build - unzip and bsdtar to
+#   unpack the tree preserving its 242 symlinks, git to track the flavour, tmux
+#   to survive SSH. They are checked separately from build-iso's own
+#   requirements: missing ones warn, they do not abort.
 #
 # USAGE:
 #   sudo ./prepare-build-host.sh                  # install + verify + caches
@@ -121,6 +126,8 @@ PACKAGES=(
     xz-utils lz4 zstd    # squashfs compression choices
     bc
     git                  # to clone/update the build tree
+    unzip                # unpacks the delivered zip, symlinks included
+    libarchive-tools     # bsdtar: same, with --strip-components
     tmux                 # see the SSH note at the end
 )
 # Only when a local caching proxy was requested.
@@ -157,6 +164,23 @@ for p in "${REQUIRED_PROGS[@]}"; do
         missing+=("$p")
     fi
 done
+
+# ---------------------------------------------------------------------------
+# 3b. Helper tools (not required by build-iso: missing ones only warn)
+# ---------------------------------------------------------------------------
+log "Helper tools"
+for pair in "unzip:unzip" "bsdtar:libarchive-tools" "git:git" "tmux:tmux"; do
+    prog=${pair%%:*} pkg=${pair##*:}
+    if command -v "$prog" >/dev/null 2>&1; then
+        ok "$prog"
+    else
+        warn "$prog missing - apt-get install $pkg"
+    fi
+done
+# Both unpack the tree preserving symlinks; 7z does NOT - it turns them into
+# regular files holding the target path, silently breaking the initrd.
+printf '   unpack with: unzip <file>.zip\n'
+printf '                bsdtar -xf <file>.zip --strip-components=1   # into an existing repo\n'
 
 # ---------------------------------------------------------------------------
 # 4. Work directory and build-iso's own caches

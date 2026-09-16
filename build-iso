@@ -777,7 +777,7 @@ Remaster_Blurb
     local full_distro_name=$DISTRO_NAME-${DISTRO_VERSION}_$ISO_ARCH
     full_distro_name=${full_distro_name// /_}
     [[ $DISTRO_NAME = antiX ]] && full_distro_name=$full_distro_name-$ISO_FLAV
-    local iso_file=$full_distro_name.iso
+    local iso_file=$full_distro_name${ISO_TIMESTAMP:+_$ISO_TIMESTAMP}.iso
 
     if [[ ${DISTRO_FAMILY:-debian} = debian ]]; then
         local dir
@@ -3406,7 +3406,7 @@ do_stage_8() {
 
     report_size "$iso_dir"
 
-    local iso_file=$full_distro_name.iso
+    local iso_file=$full_distro_name${ISO_TIMESTAMP:+_$ISO_TIMESTAMP}.iso
     mkdir -p "$iso_file_dir"
     local full_iso_file=$iso_file_dir/$iso_file
     say "Build the live $(pq "$iso_file") file"

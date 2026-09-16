@@ -27,6 +27,8 @@ copy_dir  skel-config/          /etc/skel/.config/          --create
 # or by ticking Conky in LXQt Session Settings > Autostart.
 copy_file conky.desktop         /etc/skel/.config/autostart/ --create
 copy_file lxqt-labwc.desktop    /usr/share/wayland-sessions/ --create
+copy_file run-if-x11            /usr/local/bin/ --create
+chmod 0755 "${PREFIX%/}/usr/local/bin/run-if-x11"
 chmod 0755 "${PREFIX%/}/etc/skel/.config/labwc/autostart"
 
 #---------------------------------------------------------------------------
@@ -81,7 +83,10 @@ if [ -n "$ob" ]; then
         "$SKEL/openbox/lxqt-rc.xml" "$SKEL/labwc/rc.xml"
     echo "theme.sh: window decoration theme set to $ob"
 else
-    rm -f "$SKEL/openbox/lxqt-rc.xml" "$SKEL/labwc/rc.xml"
+    # Drop only the <theme> block from labwc's rc.xml: the rest of the file
+    # carries the screen-lock keybinding and must survive.
+    rm -f "$SKEL/openbox/lxqt-rc.xml"
+    sed -i '/<theme>/,/<\/theme>/d' "$SKEL/labwc/rc.xml"
     echo "theme.sh: no Openbox-style theme found, using built-in defaults"
 fi
 

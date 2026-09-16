@@ -26,12 +26,13 @@ kamera
 kamoso
 kate
 kate-data
-kcalc
 kde-config-flatpak
 kde-config-gtk-style
 kde-config-screenlocker
 kde-config-sddm
 kde-config-updates
+kde-cli-tools
+kde-cli-tools-data
 kde-servicemenu-checkhash-installdebs
 kde-servicemenu-extract-and-compress
 kde-servicemenu-rootactions
@@ -43,6 +44,7 @@ kdegraphics-thumbnailers
 kdenetwork-filesharing
 kdeplasma-addons-data
 kdialog
+kded6
 kdoctools6
 keditbookmarks
 kfind
@@ -80,6 +82,8 @@ libreoffice-plasma
 milou
 mx-apps-kde
 oxygen-icon-theme
+okular
+okular-extra-backends
 oxygen-sounds
 pavucontrol
 plasma-browser-integration
@@ -105,6 +109,7 @@ polkit-kde-agent-1
 powerdevil
 powerdevil-data
 print-manager
+skanpage
 qml-module-org-kde-activities
 qml-module-org-kde-bluezqt
 qml-module-org-kde-draganddrop
@@ -168,6 +173,10 @@ labwc
 
 #--- shell components replaced by LXQt counterparts (all Qt) --------------
 nm-tray               #replaces plasma-nm
+network-manager-gnome #GTK, but it owns nm-connection-editor, which nm-tray
+                      #calls for VPN/static IP/802.1X: nm-tray has no editor
+                      #of its own. Its nm-applet tray icon is disabled in
+                      #/etc/skel to avoid two icons. Same choice as Lubuntu.
 pavucontrol-qt        #replaces plasma-pa
 blueman               #replaces bluedevil: the only GTK exception, because no
                       #standalone Qt bluetooth manager exists. bluedevil is a
@@ -177,9 +186,16 @@ blueman               #replaces bluedevil: the only GTK exception, because no
 qps                   #replaces plasma-systemmonitor
 screengrab            #replaces kde-spectacle
 lximage-qt            #replaces gwenview
+qpdfview              #replaces okular: Qt5, but far lighter than okular+KIO
+skanlite              #replaces skanpage: same KSane backend, plain Qt widgets
+                      #instead of the whole Kirigami/QML stack
 featherpad            #replaces kate
-speedcrunch           #replaces kcalc
 qdirstat              #replaces filelight
+xscreensaver          #screen lock on X11: kscreenlocker went away with
+xscreensaver-data     #plasma-workspace, and LXQt has no locker of its own
+swaylock              #screen lock on Wayland (xscreensaver cannot lock there)
+picom                 #compositor for Openbox: shadows, transparency, no
+                      #tearing. Not needed under labwc, which composites
 xdg-desktop-portal-lxqt   #replaces xdg-desktop-portal-kde
 mx-apps               #MX tools (Qt), replaces mx-apps-kde; mx-packageinstaller
                       #takes over from plasma-discover
@@ -196,9 +212,12 @@ gvfs-fuse
 # breeze, kde-style-breeze, breeze-icon-theme, breeze-cursor-theme,
 #   breeze-gtk-theme      : the look, shared with the SDDM login screen
 # frameworkintegration    : makes non-Plasma Qt apps follow kdeglobals
-# kio, kio-extras, kded6, kde-cli-tools : KIO for the KDE applications below
-# okular, k3b, skanpage, partitionmanager : Qt, and every lighter
-#   alternative would have been GTK
+# kio, kio-extras          : KIO for the KDE applications below
+# k3b, partitionmanager, kcalc : Qt, and every lighter alternative
+#   would have been GTK
+# NOT kept: kded6 and kde-cli-tools were dropped from the explicit list.
+#   If some dependency really needs them, apt pulls them back in by
+#   itself - which is exactly the point of not listing them
 # kdeconnect              : no equivalent anywhere; keeps KF6 installed,
 #                           which is why kdeglobals must not be purged
 # thunderbird             : replaces kmail/kontact
@@ -247,8 +266,33 @@ for pair in "kde:lxqt" "kde-sysv:lxqt-sysv"; do
         -e 's|^THEME="mxkde"|THEME="mxlxqt"|' \
         -e 's|^X_TERM_EMULATOR="/usr/bin/konsole"|X_TERM_EMULATOR="/usr/bin/qterminal"|' \
         "$src" > "$dst"
+    cat >> "$dst" <<'EOF'
+
+# Timestamp appended to the ISO file name (and therefore to its .sha256,
+# .zsync and .sig). Comment out for the plain MX-<ver>_LXQt_x64.iso name.
+# Evaluated once when this file is sourced, so every file of one build agrees.
+ISO_TIMESTAMP="$(date +%Y%m%d-%H%M)"
+EOF
     echo "  created $dst"
 done
+
+# ---------------------------------------------------------------------------
+# build-iso patch: optional timestamp in the ISO file name
+# ---------------------------------------------------------------------------
+# Applied to the two places where iso_file is composed. Idempotent, so
+# re-running this script after a master update re-applies it cleanly.
+# The timestamp deliberately does NOT go into DISTRO_VERSION: that variable
+# also names Output/<name> and Remaster/work/<name>, so a value that changes
+# every run would orphan a multi-GB work directory per build and break
+# resuming with -from.
+if grep -q 'ISO_TIMESTAMP' build-iso; then
+    echo "  build-iso already patched for ISO_TIMESTAMP"
+else
+    sed -i 's|^\( *\)local iso_file=\$full_distro_name\.iso$|\1local iso_file=$full_distro_name${ISO_TIMESTAMP:+_$ISO_TIMESTAMP}.iso|' build-iso
+    n=$(grep -c 'ISO_TIMESTAMP' build-iso)
+    [ "$n" -eq 2 ] || { echo "  ERROR: patched $n/2 occurrences in build-iso" >&2; exit 1; }
+    echo "  patched build-iso for ISO_TIMESTAMP (2 occurrences)"
+fi
 
 # ---------------------------------------------------------------------------
 # Theme
@@ -326,6 +370,13 @@ cat > Themes/mxlxqt/skel-config/labwc/rc.xml <<'EOF'
     <name>THEME</name>
     <cornerRadius>4</cornerRadius>
   </theme>
+  <keyboard>
+    <!-- <default/> keeps labwc's built-in keybindings alongside this one. -->
+    <default />
+    <keybind key="W-l">
+      <action name="Execute" command="swaylock -f -c 1c1c1c" />
+    </keybind>
+  </keyboard>
 </labwc_config>
 EOF
 
@@ -367,6 +418,45 @@ EOF
 
 # Outside Plasma there is no KDE Connect applet: the standalone indicator
 # has to be started with the session.
+# X11-only autostart helper: picom and xscreensaver must not run under labwc.
+# A .desktop file cannot test the session itself (Exec quoting makes it
+# fragile), so the test lives in this one-line wrapper.
+cat > Themes/mxlxqt/misc/run-if-x11 <<'EOF'
+#!/bin/sh
+# Run the given command only in an X11 session.
+[ -n "$WAYLAND_DISPLAY" ] && exit 0
+exec "$@"
+EOF
+
+cat > Themes/mxlxqt/skel-config/autostart/picom.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Picom (X11 compositor)
+Exec=run-if-x11 picom
+Terminal=false
+X-GNOME-Autostart-enabled=true
+EOF
+
+cat > Themes/mxlxqt/skel-config/autostart/xscreensaver.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=XScreenSaver (X11 screen lock)
+Exec=run-if-x11 xscreensaver -no-splash
+Terminal=false
+X-GNOME-Autostart-enabled=true
+EOF
+
+# network-manager-gnome ships its own tray applet; nm-tray is the Qt one we
+# want, so the GTK icon is hidden to avoid two identical tray icons.
+cat > Themes/mxlxqt/skel-config/autostart/nm-applet.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Network (GTK applet, disabled)
+Exec=nm-applet
+Terminal=false
+Hidden=true
+EOF
+
 cat > Themes/mxlxqt/skel-config/autostart/kdeconnect-indicator.desktop <<'EOF'
 [Desktop Entry]
 Type=Application
@@ -419,6 +509,8 @@ copy_dir  skel-config/          /etc/skel/.config/          --create
 # or by ticking Conky in LXQt Session Settings > Autostart.
 copy_file conky.desktop         /etc/skel/.config/autostart/ --create
 copy_file lxqt-labwc.desktop    /usr/share/wayland-sessions/ --create
+copy_file run-if-x11            /usr/local/bin/ --create
+chmod 0755 "${PREFIX%/}/usr/local/bin/run-if-x11"
 chmod 0755 "${PREFIX%/}/etc/skel/.config/labwc/autostart"
 
 #---------------------------------------------------------------------------
@@ -473,7 +565,10 @@ if [ -n "$ob" ]; then
         "$SKEL/openbox/lxqt-rc.xml" "$SKEL/labwc/rc.xml"
     echo "theme.sh: window decoration theme set to $ob"
 else
-    rm -f "$SKEL/openbox/lxqt-rc.xml" "$SKEL/labwc/rc.xml"
+    # Drop only the <theme> block from labwc's rc.xml: the rest of the file
+    # carries the screen-lock keybinding and must survive.
+    rm -f "$SKEL/openbox/lxqt-rc.xml"
+    sed -i '/<theme>/,/<\/theme>/d' "$SKEL/labwc/rc.xml"
     echo "theme.sh: no Openbox-style theme found, using built-in defaults"
 fi
 

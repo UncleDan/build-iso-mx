@@ -60,11 +60,9 @@ java-common
 javascript-common
 job-scheduler
 k3b
-kde-cli-tools
-kde-cli-tools-data
+kcalc
 kde-style-breeze
 kdeconnect
-kded6
 kimageformat-plugins
 kio
 kio-extras
@@ -111,8 +109,6 @@ mx-tour
 mx-welcome
 mx25-artwork
 mythes-en-us
-okular
-okular-extra-backends
 open-vm-tools
 packagekit
 packagekit-tools
@@ -165,7 +161,6 @@ sddm-modified-init
 sddm-theme-breeze
 sendemail
 signon-plugin-oauth2
-skanpage
 sonnet6-plugins
 sound-theme-freedesktop
 sox
@@ -222,6 +217,10 @@ labwc
 
 #--- shell components replaced by LXQt counterparts (all Qt) --------------
 nm-tray               #replaces plasma-nm
+network-manager-gnome #GTK, but it owns nm-connection-editor, which nm-tray
+                      #calls for VPN/static IP/802.1X: nm-tray has no editor
+                      #of its own. Its nm-applet tray icon is disabled in
+                      #/etc/skel to avoid two icons. Same choice as Lubuntu.
 pavucontrol-qt        #replaces plasma-pa
 blueman               #replaces bluedevil: the only GTK exception, because no
                       #standalone Qt bluetooth manager exists. bluedevil is a
@@ -231,9 +230,16 @@ blueman               #replaces bluedevil: the only GTK exception, because no
 qps                   #replaces plasma-systemmonitor
 screengrab            #replaces kde-spectacle
 lximage-qt            #replaces gwenview
+qpdfview              #replaces okular: Qt5, but far lighter than okular+KIO
+skanlite              #replaces skanpage: same KSane backend, plain Qt widgets
+                      #instead of the whole Kirigami/QML stack
 featherpad            #replaces kate
-speedcrunch           #replaces kcalc
 qdirstat              #replaces filelight
+xscreensaver          #screen lock on X11: kscreenlocker went away with
+xscreensaver-data     #plasma-workspace, and LXQt has no locker of its own
+swaylock              #screen lock on Wayland (xscreensaver cannot lock there)
+picom                 #compositor for Openbox: shadows, transparency, no
+                      #tearing. Not needed under labwc, which composites
 xdg-desktop-portal-lxqt   #replaces xdg-desktop-portal-kde
 mx-apps               #MX tools (Qt), replaces mx-apps-kde; mx-packageinstaller
                       #takes over from plasma-discover
@@ -250,9 +256,12 @@ gvfs-fuse
 # breeze, kde-style-breeze, breeze-icon-theme, breeze-cursor-theme,
 #   breeze-gtk-theme      : the look, shared with the SDDM login screen
 # frameworkintegration    : makes non-Plasma Qt apps follow kdeglobals
-# kio, kio-extras, kded6, kde-cli-tools : KIO for the KDE applications below
-# okular, k3b, skanpage, partitionmanager : Qt, and every lighter
-#   alternative would have been GTK
+# kio, kio-extras          : KIO for the KDE applications below
+# k3b, partitionmanager, kcalc : Qt, and every lighter alternative
+#   would have been GTK
+# NOT kept: kded6 and kde-cli-tools were dropped from the explicit list.
+#   If some dependency really needs them, apt pulls them back in by
+#   itself - which is exactly the point of not listing them
 # kdeconnect              : no equivalent anywhere; keeps KF6 installed,
 #                           which is why kdeglobals must not be purged
 # thunderbird             : replaces kmail/kontact
