@@ -11,32 +11,76 @@ Base: Debian 13 *trixie* (MX 25.3), kernel 6.12, AHS repositories enabled.
 
 ## Build
 
-### 1. Build host
+### 1. Get the tree
+
+```bash
+git clone https://github.com/MX-Linux/build-iso-mx.git -b lxqt
+cd build-iso-mx
+```
+
+The `lxqt` branch is where this flavour lives, so point the clone at the fork
+that carries it (`https://github.com/<your-account>/build-iso-mx.git`): the
+upstream MX-Linux repository has no such branch and the clone would fail with
+"Remote branch lxqt not found".
+
+Work on Linux only. The tree contains 242 symlinks — busybox applets in the
+initrd, a self-referential `usr -> .`, systemd masks pointing at `/dev/null` —
+and neither NTFS nor 7-Zip preserves them. A checkout or extraction that turns
+them into regular files produces a tree that fails mid-build. Check with:
+
+```bash
+find . -type l | wc -l      # 242
+```
+
+#### Updating the branch from a delivered zip
+
+The zip carries the whole tree, so the clean way is to empty the working tree,
+keeping `.git` and the work directories, and unpack over it: git then works
+out by itself what was added, changed or removed.
+
+```bash
+git switch lxqt
+git status                  # must be clean before wiping anything
+
+find . -mindepth 1 -maxdepth 1 ! -name .git ! -name Remaster ! -name Output -exec rm -rf {} +
+bsdtar -xf ~/build-iso-mx-lxqt_v*.zip --strip-components=1
+
+git add -A
+git status                  # review the diff BEFORE committing
+git commit -m "Update mxlxqt flavour"
+```
+
+`bsdtar` comes from `libarchive-tools`; `--strip-components=1` drops the
+archive's own top directory so the files land in the repository root. Without
+it: `unzip -q <file>.zip -d /tmp/x && mv /tmp/x/*/* /tmp/x/*/.[!.]* . && rm -rf /tmp/x`.
+Never use `7z` here — it stores symlinks as regular files holding the target
+path.
+
+The `find` line also deletes git-ignored files. `Remaster` and `Output` are
+excluded above because they hold the caches and the built ISOs; check with
+`git status --ignored` whether anything else in the tree needs excluding, and
+note that `Remaster` is often a symlink to another disk — the exclusion
+protects that too.
+
+### 2. Build host
 
 A minimal, headless Debian 13 trixie, on a VM or bare metal — not an
 unprivileged container, where the chroot and its bind mounts fail. Budget
 30-40 GB for `Remaster/`.
 
 `prepare-build-host.sh` installs exactly what build-iso calls on the host (the
-list comes from its own `require_programs()` calls) and sets up the caches:
+list comes from its own `require_programs()` calls) and sets up the caches.
+Run it from inside the tree:
 
 ```bash
-unzip -q build-iso-mx-lxqt_*.zip
-find build-iso-mx-master -type l | wc -l   # 242 - if it is 0, extract again
-cd build-iso-mx-master
-sudo ~/prepare-build-host.sh               # run it from inside the tree
+sudo ./Tools/prepare-build-host.sh
 ```
 
 Useful options: `--remaster /srv/remaster` to put the work directory on
 another disk, `--proxy` for a local apt-cacher-ng, `--check` to verify without
-installing anything.
+installing anything, `--no-sign` / `--sign-key` for the signature (see below).
 
-Extract the archive on Linux only. The tree contains 242 symlinks — busybox
-applets in the initrd, a self-referential `usr -> .`, systemd masks pointing
-at `/dev/null` — and neither NTFS nor 7-Zip preserves them. An extraction that
-reports "cannot create symbolic link" produces a tree that fails mid-build.
-
-### 2. Build
+### 3. Build
 
 ```bash
 tmux new -s iso                                      # a build takes hours
@@ -52,28 +96,35 @@ with `mount | grep -E 'Remaster|chroot'` and unmount in reverse order.
 
 The ISO lands in `Remaster/iso-files/`, with its `.sha256` and `.zsync`.
 
-The file name carries a timestamp:
+Pre-release builds get a timestamped name through two options added to
+`build-iso` (they work for every flavour, not just this one):
 
+```bash
+sudo ./build-iso --user-default defaults-lxqt --alpha
+#   -> MX-25.3_LXQt_x64_ALPHA_20260917-1051.iso
+sudo ./build-iso --user-default defaults-kde --beta
+#   -> MX-25.3_KDE_x64_BETA_20260917-1157.iso
+sudo ./build-iso --user-default defaults-lxqt
+#   -> MX-25.3_LXQt_x64.iso          (unchanged naming)
 ```
-MX-25.3_LXQt_x64_20260915-2145.iso
-```
 
-It comes from `ISO_TIMESTAMP` in `Input/defaults-lxqt`, plus a two-line patch
-to `build-iso` (the two places where `iso_file` is composed). Comment the
-variable out for the plain `MX-25.3_LXQt_x64.iso`.
+`.sha256`, `.zsync` and `.sig` follow the same name. The suffix is applied to
+the file name only, never to `DISTRO_VERSION`: that variable also names
+`Output/<name>` and `Remaster/work/<name>`, so a value changing at every run
+would leave a multi-GB work directory behind per build and break resuming with
+`-from`. The ISO volume label is untouched as well — live-boot finds the
+medium by label, so renaming it would break booting.
 
-The timestamp is applied to the file name only, never to `DISTRO_VERSION`.
-That variable also names `Output/<name>` and `Remaster/work/<name>`, so a
-value changing at every run would leave behind a multi-GB work directory per
-build and break resuming a build with `-from`. As a side effect, consecutive
-builds no longer overwrite each other, so `build-iso` stops asking whether to
-replace an existing output file — prune `Remaster/iso-files/` yourself.
+The option belongs to the invocation that actually writes the ISO: when
+resuming a build with `-from 8`, pass `--alpha` or `--beta` again, or the
+image comes out with the plain name.
 
-`Tools/make-lxqt-flavour.sh` re-applies the patch after a master update, and
-is idempotent: it checks for `ISO_TIMESTAMP` before touching `build-iso`, and
-aborts if it cannot patch both occurrences.
+`Tools/make-lxqt-flavour.sh` applies this patch (two places where `iso_file`
+is composed, the option parser and the help text) and is idempotent: it checks
+for `ISO_SUFFIX` first, verifies all four substitutions landed, and runs
+`bash -n` on the result before declaring success.
 
-### 3. Signing
+### 4. Signing
 
 `Input/defaults-system` sets `SIGN_FILES="true"`, so build-iso always tries
 `gpg --detach-sign` on the finished ISO. Two things are easy to miss:
@@ -122,7 +173,7 @@ sudo ./prepare-build-host.sh --no-sign     # writes Input/defaults-local
 signature never invalidates the ISO: the build reports a STRICT error, but the
 image in `Remaster/iso-files/` is complete and bootable.
 
-### 4. Test before writing to a USB stick
+### 5. Test before writing to a USB stick
 
 ```bash
 qemu-system-x86_64 -m 2048 -enable-kvm -cdrom Remaster/iso-files/MX-25.3_LXQt_x64.iso

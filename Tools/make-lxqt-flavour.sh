@@ -276,32 +276,46 @@ for pair in "kde:lxqt" "kde-sysv:lxqt-sysv"; do
         -e 's|^THEME="mxkde"|THEME="mxlxqt"|' \
         -e 's|^X_TERM_EMULATOR="/usr/bin/konsole"|X_TERM_EMULATOR="/usr/bin/qterminal"|' \
         "$src" > "$dst"
-    cat >> "$dst" <<'EOF'
-
-# Timestamp appended to the ISO file name (and therefore to its .sha256,
-# .zsync and .sig). Comment out for the plain MX-<ver>_LXQt_x64.iso name.
-# Evaluated once when this file is sourced, so every file of one build agrees.
-ISO_TIMESTAMP="$(date +%Y%m%d-%H%M)"
-EOF
     echo "  created $dst"
 done
 
 # ---------------------------------------------------------------------------
-# build-iso patch: optional timestamp in the ISO file name
+# build-iso patch: --alpha / --beta pre-release ISO names
 # ---------------------------------------------------------------------------
-# Applied to the two places where iso_file is composed. Idempotent, so
-# re-running this script after a master update re-applies it cleanly.
-# The timestamp deliberately does NOT go into DISTRO_VERSION: that variable
-# also names Output/<name> and Remaster/work/<name>, so a value that changes
-# every run would orphan a multi-GB work directory per build and break
-# resuming with -from.
-if grep -q 'ISO_TIMESTAMP' build-iso; then
-    echo "  build-iso already patched for ISO_TIMESTAMP"
+# Adds two command-line options to build-iso, for every flavour, not just this
+# one:
+#   --alpha  EXPERIMENTAL build -> MX-25.3_LXQt_x64_ALPHA_20260917-1051.iso
+#   --beta   TEST build         -> MX-25.3_KDE_x64_BETA_20260917-1157.iso
+#   neither  -> the usual MX-25.3_Xfce_ahs_x64.iso
+#
+# The suffix lands on the ISO file name only (and therefore on its .sha256,
+# .zsync and .sig). It deliberately does NOT touch DISTRO_VERSION, which also
+# names Output/<name> and Remaster/work/<name>: a value changing at every run
+# would orphan a multi-GB work directory per build and break resuming with
+# -from. The ISO volume label is left alone too - live-boot finds the medium
+# by label, so renaming it would break booting.
+#
+# Idempotent: re-running this script after a master update re-applies it.
+if grep -q 'ISO_SUFFIX' build-iso; then
+    echo "  build-iso already patched for --alpha/--beta"
 else
-    sed -i 's|^\( *\)local iso_file=\$full_distro_name\.iso$|\1local iso_file=$full_distro_name${ISO_TIMESTAMP:+_$ISO_TIMESTAMP}.iso|' build-iso
-    n=$(grep -c 'ISO_TIMESTAMP' build-iso)
-    [ "$n" -eq 2 ] || { echo "  ERROR: patched $n/2 occurrences in build-iso" >&2; exit 1; }
-    echo "  patched build-iso for ISO_TIMESTAMP (2 occurrences)"
+    cat > /tmp/iso-opts.txt <<'OPTS'
+             -alpha)     ISO_SUFFIX="ALPHA_$(date +%Y%m%d-%H%M)"      ;;
+              -beta)     ISO_SUFFIX="BETA_$(date +%Y%m%d-%H%M)"       ;;
+OPTS
+    cat > /tmp/iso-help.txt <<'HELP'
+    --alpha             EXPERIMENTAL build: name the iso ..._ALPHA_<timestamp>.iso
+    --beta              TEST build: name the iso ..._BETA_<timestamp>.iso
+HELP
+    sed -i 's|^\( *\)local iso_file=\$full_distro_name\.iso$|\1local iso_file=$full_distro_name${ISO_SUFFIX:+_$ISO_SUFFIX}.iso|' build-iso
+    sed -i '/^ *-no-ucode)/r /tmp/iso-opts.txt' build-iso
+    sed -i '/^    --no-ucode  /r /tmp/iso-help.txt' build-iso
+    rm -f /tmp/iso-opts.txt /tmp/iso-help.txt
+    n=$(grep -c 'ISO_SUFFIX' build-iso)
+    [ "$n" -eq 4 ] || { echo "  ERROR: patched build-iso in $n/4 places" >&2; exit 1; }
+    grep -q -- '--alpha  ' build-iso || { echo "  ERROR: usage text not patched" >&2; exit 1; }
+    bash -n build-iso || { echo "  ERROR: patched build-iso does not parse" >&2; exit 1; }
+    echo "  patched build-iso for --alpha/--beta"
 fi
 
 # ---------------------------------------------------------------------------

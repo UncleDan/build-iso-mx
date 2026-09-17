@@ -26,8 +26,3 @@ ENABLE_LOCALES="Default"
 # DE particular items
 X_TERM_EMULATOR="/usr/bin/qterminal"
 
-
-# Timestamp appended to the ISO file name (and therefore to its .sha256,
-# .zsync and .sig). Comment out for the plain MX-<ver>_LXQt_x64.iso name.
-# Evaluated once when this file is sourced, so every file of one build agrees.
-ISO_TIMESTAMP="$(date +%Y%m%d-%H%M)"
