@@ -198,7 +198,9 @@ LXQt Session Settings → Autostart.
 | plasma-nm | nm-tray |
 | plasma-pa, pavucontrol | pavucontrol-qt |
 | kscreenlocker (in plasma-workspace) | xscreensaver (X11) + swaylock (Wayland) |
-| bluedevil | blueman (the one GTK exception, see below) |
+| bluedevil | blueman |
+| k3b | xfburn |
+| partitionmanager | gparted |
 | powerdevil | lxqt-powermanagement |
 | polkit-kde-agent-1 | lxqt-policykit |
 | systemsettings, kscreen | lxqt-config |
@@ -209,35 +211,43 @@ LXQt Session Settings → Autostart.
 | skanpage | skanlite |
 | kate | featherpad |
 | filelight | qdirstat |
+| kcalc | qalculate-qt |
 | ark | lxqt-archiver |
 | plasma-discover | mx-packageinstaller (Qt, from mx-apps) |
 | xdg-desktop-portal-kde | xdg-desktop-portal-lxqt |
 | kmail / kontact | thunderbird |
 | mx-apps-kde | mx-apps |
 
-Every replacement above is Qt. Where the only lighter alternative would have
-been GTK, the KDE application is kept instead: **k3b** (not xfburn),
-**partitionmanager** (not gparted), **kcalc** (kept over speedcrunch, since
-KF6 is installed anyway) and **mx-packageinstaller** (not synaptic).
+Every replacement above is Qt where a serious Qt option exists. Where it does
+not, the rule is not "GTK is forbidden" but "use what MX itself ships and
+tests":
 
-Two KDE applications were traded for lighter Qt ones, the same way Lubuntu
-does: **qpdfview** instead of okular (Qt5, but it avoids dragging okular and
-its KIO/Kirigami stack in for reading a PDF) and **skanlite** instead of
-skanpage (same KSane backend, plain Qt widgets instead of the whole QML
-stack; skanpage is only worth it for multi-page PDF scanning with OCR).
+* **blueman** (not bluedevil) — no standalone Qt bluetooth manager exists.
+  bluedevil is a Plasma applet plus a kded6 module: outside Plasma it means a
+  resident daemon for a partial interface reachable only through
+  `kcmshell6 kcm_bluetooth`. Blueman runs standalone, has a working tray
+  applet under both Openbox and labwc, and autostarts on its own. Lubuntu
+  ships it for the same reason.
+* **network-manager-gnome** (alongside nm-tray) — nm-tray is only an applet
+  and calls `nm-connection-editor` for VPN, static IP and 802.1X. Lubuntu
+  makes the same trade; its `nm-applet` icon is disabled here.
+* **xfburn** (not k3b) and **gparted** (not partitionmanager) — these are the
+  burner and partition editor of the MX Xfce and Fluxbox editions, so they are
+  already tested on this distro, and both are far lighter than their KDE
+  counterparts.
+
+Two KDE applications were traded for lighter Qt ones, the way Lubuntu does:
+**qpdfview** instead of okular (Qt5, but it avoids dragging okular and its
+KIO/Kirigami stack in just to read a PDF), **skanlite** instead of skanpage
+(same KSane backend, plain Qt widgets instead of the whole QML stack;
+skanpage is only worth it for multi-page PDF scanning with OCR) and
+**qalculate-qt** instead of kcalc (Qt6 with no KF6 dependency at all, and a
+far more capable calculator).
 
 `kded6` and `kde-cli-tools` are deliberately *not* in the explicit list: they
 are support daemons that do little outside Plasma. If some dependency really
 needs them, apt installs them anyway — which is the point of not listing
 them.
-
-The single exception is Bluetooth: **blueman** is GTK, but no standalone Qt
-bluetooth manager exists. bluedevil is a Plasma applet plus a kded6 module, so
-outside Plasma it would mean a resident daemon for a partial interface
-reachable only through `kcmshell6 kcm_bluetooth`. Blueman runs standalone,
-provides a real tray applet under both Openbox and labwc, and autostarts from
-its own `/etc/xdg/autostart/blueman.desktop`. Lubuntu ships it for the same
-reason. GTK3 is in the ISO regardless (GIMP, Firefox, pdfarranger).
 
 `gvfs` is kept because libfm-qt uses it for mounts, trash and network shares.
 It is a background glib service, not a GTK application; the KDE applications
@@ -260,7 +270,8 @@ Package count: 309 -> 225 (systemd flavour).
 * **frameworkintegration** — this is what makes Qt applications outside
   Plasma honour `kdeglobals`. Without it the KDE applications fall back to
   their own defaults and the desktop looks inconsistent.
-* **kio, kio-extras** — KIO for the KDE applications that stayed.
+* **kio, kio-extras** — KDE Connect uses KIO to browse the phone's
+  filesystem; with k3b and partitionmanager gone it is the only reason left.
 * **thunderbird**, **qbittorrent**, **vlc**, **gimp**, **libreoffice** —
   unchanged from the KDE flavour (`libreoffice-kf6` and `libreoffice-plasma`
   dropped, `libreoffice-qt6` kept).
@@ -329,7 +340,7 @@ this tree. Confirm the ones MX does not already ship in another flavour:
 PKGS="lxqt-core labwc openbox obconf-qt nm-tray \
 pavucontrol-qt qps qdirstat screengrab lximage-qt qpdfview skanlite \
 lxqt-archiver featherpad mx-apps pcmanfm-qt qterminal \
-xdg-desktop-portal-lxqt blueman k3b partitionmanager kcalc \
+xdg-desktop-portal-lxqt blueman xfburn gparted qalculate-qt \
 xscreensaver swaylock picom network-manager-gnome"
 
 for p in $PKGS; do

@@ -20,12 +20,14 @@ ffmpegthumbs
 filelight
 kaccounts-integration
 kaccounts-providers
+k3b
 kactivities-bin
 kactivitymanagerd
 kamera
 kamoso
 kate
 kate-data
+kcalc
 kde-config-flatpak
 kde-config-gtk-style
 kde-config-screenlocker
@@ -82,6 +84,7 @@ libreoffice-plasma
 milou
 mx-apps-kde
 oxygen-icon-theme
+partitionmanager
 okular
 okular-extra-backends
 oxygen-sounds
@@ -191,6 +194,13 @@ skanlite              #replaces skanpage: same KSane backend, plain Qt widgets
                       #instead of the whole Kirigami/QML stack
 featherpad            #replaces kate
 qdirstat              #replaces filelight
+qalculate-qt          #replaces kcalc: Qt6 and no KF6 dependency at all,
+                      #and a far more capable calculator. Lubuntu's choice
+xfburn                #replaces k3b: GTK, but it is what MX itself ships in
+                      #the Xfce and Fluxbox editions, so it is tested on this
+                      #distro and far lighter than k3b
+gparted               #replaces partitionmanager: same reasoning, and it is
+                      #the partition editor of the MX Xfce edition
 xscreensaver          #screen lock on X11: kscreenlocker went away with
 xscreensaver-data     #plasma-workspace, and LXQt has no locker of its own
 swaylock              #screen lock on Wayland (xscreensaver cannot lock there)
@@ -213,8 +223,8 @@ gvfs-fuse
 #   breeze-gtk-theme      : the look, shared with the SDDM login screen
 # frameworkintegration    : makes non-Plasma Qt apps follow kdeglobals
 # kio, kio-extras          : KIO for the KDE applications below
-# k3b, partitionmanager, kcalc : Qt, and every lighter alternative
-#   would have been GTK
+# (k3b and partitionmanager were dropped for xfburn and gparted: the
+#   two GTK tools MX itself ships in its other editions)
 # NOT kept: kded6 and kde-cli-tools were dropped from the explicit list.
 #   If some dependency really needs them, apt pulls them back in by
 #   itself - which is exactly the point of not listing them
