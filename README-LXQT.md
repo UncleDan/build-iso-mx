@@ -1,11 +1,26 @@
 # MX LXQt flavour (mxlxqt)
 
+[![Download MX Linux Respins by UncleDan](https://a.fsdn.com/con/app/sf-download-button)](https://sourceforge.net/projects/mx-linux-respins-uncledan74/files/latest/download)
+
+> [!CAUTION]
+> ## ⚠️ ALPHA — EXPERIMENTAL BUILD
+>
+> This is an **unfinished, experimental respin**. It is not an official MX
+> Linux release and it is not supported by the MX Linux team.
+>
+> Expect breakage: the Wayland session in particular is built on components
+> that Debian does not ship yet, no major distribution runs LXQt on Wayland in
+> production, and parts of LXQt do not work under it at all.
+>
+> **Do not use it on a machine that matters, and do not use it without
+> backups.** Test it in a virtual machine first.
+
 LXQt respin of the MX 25.x KDE edition, built by duplicating the KDE flavour
 and replacing Plasma with LXQt 2.1: **Openbox on X11, labwc on Wayland**.
 
 Only the Plasma *shell* is replaced. LXQt is Qt too, and KDE Connect keeps KDE
 Frameworks 6 installed regardless, so the KDE application and theming stack is
-kept on purpose and **no GTK application is used as a replacement**.
+kept on purpose.
 
 Base: Debian 13 *trixie* (MX 25.3), kernel 6.12, AHS repositories enabled.
 
@@ -414,6 +429,29 @@ same repositories (AHS included).
 
 `mx-apps` is the generic MX tools metapackage used by the Xfce flavour; there
 is no `mx-apps-lxqt`.
+
+## Traps found in the first builds
+
+* **`pesky-package.list` installs, it does not block.** Part 7 of the chroot
+  stage runs `apt-get install` on every name in that file: it exists for
+  packages that must be installed *late*, so their config files are not
+  overwritten. The KDE list carries `desktop-defaults-mx-kde` for that reason;
+  left in place here it installed MX's KDE defaults and pulled Plasma back in
+  with them, which is how `plasma.desktop` reappeared in the SDDM session list
+  — selectable, and fatal when selected. There is no LXQt counterpart, so the
+  line is removed, and the Plasma session files are listed in
+  `delete-files.list` as a second line of defence.
+* **The panel needs an explicit `panel.conf`.** Without one, lxqt-panel builds
+  a default panel whose main-menu button looks for an icon that is not in the
+  icon theme, so the button renders empty. `/etc/skel/.config/lxqt/panel.conf`
+  defines the layout, and `theme.sh` substitutes a menu icon that actually
+  exists in the built image (MX logo, else `start-here`, else the plugin
+  default).
+* **Desktop launchers must be executable.** PCManFM-Qt asks "execute or open?"
+  for a `.desktop` file that is not marked executable — which is what happens
+  when clicking the MX installer icon. `theme.sh` marks
+  `/etc/skel/Desktop/*.desktop` executable and `QuickExec=true` is set in the
+  PCManFM-Qt settings.
 
 ## Known Wayland limitations (upstream)
 

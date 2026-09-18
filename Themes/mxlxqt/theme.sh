@@ -90,6 +90,34 @@ else
     echo "theme.sh: no Openbox-style theme found, using built-in defaults"
 fi
 
+# Main menu icon: use something that actually exists in this build, or drop
+# the key so lxqt-panel falls back to its own default rather than to nothing.
+menuicon=""
+for i in /usr/share/pixmaps/mx-logo.png /usr/share/pixmaps/mxlogo.png \
+         /usr/share/icons/hicolor/scalable/apps/mx-logo.svg \
+         /usr/share/pixmaps/debian-logo.png; do
+    [ -f "$ROOT$i" ] && menuicon="$i" && break
+done
+if [ -z "$menuicon" ]; then
+    for i in start-here distributor-logo start-here-kde; do
+        ls -d "$ROOT"/usr/share/icons/*/*/*/"$i".* >/dev/null 2>&1 && menuicon="$i" && break
+    done
+fi
+if [ -n "$menuicon" ]; then
+    sed -i "s|^icon=MENUICON$|icon=$menuicon|" "$SKEL/lxqt/panel.conf"
+    echo "theme.sh: main menu icon set to $menuicon"
+else
+    sed -i '/^icon=MENUICON$/d' "$SKEL/lxqt/panel.conf"
+    echo "theme.sh: no main menu icon found, using the plugin default"
+fi
+
+# Desktop launchers (the MX installer icon) must be executable, otherwise
+# PCManFM-Qt asks "execute or open?" on every click.
+if [ -d "$ROOT/etc/skel/Desktop" ]; then
+    chmod 0755 "$ROOT"/etc/skel/Desktop/*.desktop 2>/dev/null
+    echo "theme.sh: marked /etc/skel/Desktop launchers executable"
+fi
+
 # Desktop wallpaper: reuse whatever MX artwork this build ships.
 wp=""
 for d in "$ROOT"/usr/share/backgrounds "$ROOT"/usr/share/wallpapers; do

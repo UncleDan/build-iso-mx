@@ -252,9 +252,20 @@ for pair in "mxkde:mxlxqt" "mxkde-sysv:mxlxqt-sysv"; do
     rm -rf "$dst"; cp -a "$src" "$dst"
     make_pkg_list "$src/package.list" "$dst/package.list"
     echo "LXQt" > "$dst/default-desktop"
-    # desktop-defaults-mx-kde must never sneak in: there is no LXQt counterpart.
-    sed -i 's|^desktop-defaults-mx-kde$|desktop-defaults-mx-kde   #KDE-only defaults: must not be installed|' \
-        "$dst/pesky-package.list"
+    # pesky-package.list is a list of packages INSTALLED LATE (part 7), not a
+    # blocklist. desktop-defaults-mx-kde would therefore install MX's KDE
+    # defaults - and pull Plasma in with them, which is what put plasma.desktop
+    # back into the SDDM session list. There is no LXQt counterpart: drop it.
+    sed -i '/^desktop-defaults-mx-kde$/d' "$dst/pesky-package.list"
+    # Belt and braces: if anything ever pulls Plasma back in as a dependency,
+    # its session entries must not reach the ISO - they would show up in SDDM
+    # and hang the machine when selected.
+    cat >> "$dst/delete-files.list" <<'EOF'
+usr/share/xsessions/plasma.desktop
+usr/share/xsessions/plasmax11.desktop
+usr/share/wayland-sessions/plasma.desktop
+usr/share/wayland-sessions/plasmawayland.desktop
+EOF
     # Report drop entries that no longer exist upstream: after a master update
     # a renamed or removed package would otherwise be dropped silently.
     while read -r d; do
@@ -364,6 +375,74 @@ EOF
 # Minimal kdeglobals for the live user: KDE Connect and every other KF6
 # application reads it. theme.sh merges the Breeze colour scheme into it at
 # build time.
+# Panel layout. Without this file lxqt-panel builds a default panel whose main
+# menu button ends up with no icon, because the icon it looks for is not in the
+# icon theme. MENUICON is replaced at build time with an icon that exists, or
+# dropped entirely so the plugin falls back to its own default.
+cat > Themes/mxlxqt/skel-config/lxqt/panel.conf <<'EOF'
+[General]
+__userfile__=true
+iconTheme=
+
+[panel1]
+alignment=-1
+animation-duration=0
+background-color=@Variant(\0\0\0\x43\0\xff\xff\0\0\0\0\0\0\0\0)
+desktop=0
+font-color=@Variant(\0\0\0\x43\0\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff)
+hidable=false
+iconSize=22
+lineCount=1
+lockPanel=false
+panelSize=32
+plugins=mainmenu, quicklaunch, desktopswitch, taskbar, tray, statusnotifier, mount, volume, clock, showdesktop
+position=Bottom
+width=100
+width-percent=true
+
+[mainmenu]
+type=mainmenu
+alignment=Left
+icon=MENUICON
+showText=false
+
+[quicklaunch]
+type=quicklaunch
+alignment=Left
+
+[desktopswitch]
+type=desktopswitch
+alignment=Left
+
+[taskbar]
+type=taskbar
+alignment=Left
+
+[tray]
+type=tray
+alignment=Right
+
+[statusnotifier]
+type=statusnotifier
+alignment=Right
+
+[mount]
+type=mount
+alignment=Right
+
+[volume]
+type=volume
+alignment=Right
+
+[clock]
+type=clock
+alignment=Right
+
+[showdesktop]
+type=showdesktop
+alignment=Right
+EOF
+
 cat > Themes/mxlxqt/skel-config/kdeglobals <<'EOF'
 [General]
 ColorScheme=BreezeDark
@@ -438,6 +517,11 @@ Wallpaper=
 WallpaperMode=stretch
 BgColor=#000000
 ShowWmMenu=false
+
+[Behavior]
+# Launch .desktop files on the desktop straight away instead of asking
+# "execute or open?" every time (the MX installer icon lives there).
+QuickExec=true
 EOF
 
 # Outside Plasma there is no KDE Connect applet: the standalone indicator
@@ -594,6 +678,34 @@ else
     rm -f "$SKEL/openbox/lxqt-rc.xml"
     sed -i '/<theme>/,/<\/theme>/d' "$SKEL/labwc/rc.xml"
     echo "theme.sh: no Openbox-style theme found, using built-in defaults"
+fi
+
+# Main menu icon: use something that actually exists in this build, or drop
+# the key so lxqt-panel falls back to its own default rather than to nothing.
+menuicon=""
+for i in /usr/share/pixmaps/mx-logo.png /usr/share/pixmaps/mxlogo.png \
+         /usr/share/icons/hicolor/scalable/apps/mx-logo.svg \
+         /usr/share/pixmaps/debian-logo.png; do
+    [ -f "$ROOT$i" ] && menuicon="$i" && break
+done
+if [ -z "$menuicon" ]; then
+    for i in start-here distributor-logo start-here-kde; do
+        ls -d "$ROOT"/usr/share/icons/*/*/*/"$i".* >/dev/null 2>&1 && menuicon="$i" && break
+    done
+fi
+if [ -n "$menuicon" ]; then
+    sed -i "s|^icon=MENUICON$|icon=$menuicon|" "$SKEL/lxqt/panel.conf"
+    echo "theme.sh: main menu icon set to $menuicon"
+else
+    sed -i '/^icon=MENUICON$/d' "$SKEL/lxqt/panel.conf"
+    echo "theme.sh: no main menu icon found, using the plugin default"
+fi
+
+# Desktop launchers (the MX installer icon) must be executable, otherwise
+# PCManFM-Qt asks "execute or open?" on every click.
+if [ -d "$ROOT/etc/skel/Desktop" ]; then
+    chmod 0755 "$ROOT"/etc/skel/Desktop/*.desktop 2>/dev/null
+    echo "theme.sh: marked /etc/skel/Desktop launchers executable"
 fi
 
 # Desktop wallpaper: reuse whatever MX artwork this build ships.

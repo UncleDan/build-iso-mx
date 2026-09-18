@@ -1,2 +1,6 @@
 #usr/share/lightdm/lightdm.conf.d/40-kde-plasma-kf5.conf
 usr/share/sddm/themes/debian-theme # rm link that adds duplicate 
+usr/share/xsessions/plasma.desktop
+usr/share/xsessions/plasmax11.desktop
+usr/share/wayland-sessions/plasma.desktop
+usr/share/wayland-sessions/plasmawayland.desktop
