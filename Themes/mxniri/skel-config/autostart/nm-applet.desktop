@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Network
+Exec=nm-applet
+# Started by niri-mx-autostart with --indicator instead (waybar tray needs it).
+Hidden=true

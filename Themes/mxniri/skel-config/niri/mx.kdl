@@ -1,0 +1,20 @@
+// MX Linux additions to the niri configuration.
+// Included at the end of config.kdl, so what is set here wins.
+// Reference: https://niri-wm.github.io/niri/Configuration:-Introduction
+
+binds {
+    Mod+E hotkey-overlay-title="Open the File Manager: Thunar" { spawn "thunar"; }
+    Mod+Shift+D hotkey-overlay-title="MX Tools" { spawn "mx-tools"; }
+    Mod+Shift+T hotkey-overlay-title="Task Manager" { spawn "xfce4-taskmanager"; }
+}
+
+window-rule {
+    // MX Tools and similar small utilities are more usable floating.
+    match app-id="^mx-"
+    open-floating true
+}
+
+// Conky is installed but not started: it is an X11 program, so under niri it
+// runs as a normal window through xwayland-satellite, not on the desktop
+// background. Uncomment to start it anyway:
+// spawn-sh-at-startup "sh /usr/share/mx-conky-data/conky-startup.sh"

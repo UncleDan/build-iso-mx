@@ -1,0 +1,114 @@
+#!/bin/sh
+#==============================================================================
+# niri-mx-autostart: session helpers for the MX niri flavour.
+#
+# Started once per session by niri:  spawn-at-startup "niri-mx-autostart"
+#
+# Everything is started only if it is not already running, so this is safe
+# when systemd user units (waybar.service, mako.service, ...) are enabled too.
+#==============================================================================
+
+uid=$(id -u)
+config_dir=${XDG_CONFIG_HOME:-$HOME/.config}
+niri_dir=$config_dir/niri
+
+# run_once PATTERN COMMAND [ARGS...]
+# Start COMMAND in the background unless a process of this user already
+# matches PATTERN (matched against the full command line).
+run_once() {
+    pattern=$1
+    shift
+    command -v "$1" >/dev/null 2>&1 || [ -x "$1" ] || return 0
+    pgrep -u "$uid" -f -- "$pattern" >/dev/null 2>&1 && return 0
+    "$@" >/dev/null 2>&1 &
+}
+
+is_live() { [ -e /live/config/proc-cmdline ]; }
+
+has_systemd() { [ -d /run/systemd/system ]; }
+
+#------------------------------------------------------------------------------
+# Keyboard layout
+# niri reads xkb settings from its config, not from /etc/default/keyboard.
+# mx-keyboard.kdl is (re)generated from /etc/default/keyboard (set by the MX
+# live boot menu, the installer and MX Tools) as long as its first line is the
+# marker below. Delete that line to manage the file by hand. niri reloads
+# included files automatically.
+#------------------------------------------------------------------------------
+marker="// managed by niri-mx-autostart"
+kbd_file=$niri_dir/mx-keyboard.kdl
+
+write_keyboard() {
+    [ -r /etc/default/keyboard ] || return 0
+    if [ -e "$kbd_file" ] && [ "$(head -n 1 "$kbd_file")" != "$marker" ]; then
+        return 0
+    fi
+
+    # shellcheck disable=SC1091
+    . /etc/default/keyboard
+
+    tmp=$(mktemp) || return 0
+    {
+        echo "$marker"
+        echo "// Generated from /etc/default/keyboard at login."
+        echo "input {"
+        echo "    keyboard {"
+        echo "        xkb {"
+        [ -n "${XKBLAYOUT:-}" ]  && printf '            layout "%s"\n'  "$XKBLAYOUT"
+        [ -n "${XKBVARIANT:-}" ] && printf '            variant "%s"\n' "$XKBVARIANT"
+        [ -n "${XKBOPTIONS:-}" ] && printf '            options "%s"\n' "$XKBOPTIONS"
+        [ -n "${XKBMODEL:-}" ]   && printf '            model "%s"\n'   "$XKBMODEL"
+        echo "        }"
+        echo "    }"
+        echo "}"
+    } > "$tmp"
+
+    mkdir -p "$niri_dir"
+    if cmp -s "$tmp" "$kbd_file"; then
+        rm -f "$tmp"
+    else
+        mv "$tmp" "$kbd_file"
+    fi
+}
+
+write_keyboard
+
+# Give systemd user units a moment to come up before checking for them.
+has_systemd && sleep 1
+
+#------------------------------------------------------------------------------
+# Session components
+#------------------------------------------------------------------------------
+run_once '^waybar'   waybar
+run_once '^mako'     mako
+run_once 'polkit-gnome-authentication-agent-1' \
+    /usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1
+# --indicator: StatusNotifierItem icon, the only kind waybar's tray shows.
+run_once '^nm-applet' nm-applet --indicator
+
+wallpaper=$niri_dir/wallpaper
+[ -e "$wallpaper" ] || wallpaper=/usr/share/backgrounds/default25.png
+[ -r "$wallpaper" ] && run_once '^swaybg' swaybg -m fill -i "$wallpaper"
+
+# No automatic lock in the live session (the live user may not know the
+# password); monitors still power off when idle.
+if is_live; then
+    run_once '^swayidle' swayidle -w \
+        timeout 900 'niri msg action power-off-monitors'
+else
+    run_once '^swayidle' swayidle -w \
+        timeout 600 'swaylock -f' \
+        timeout 900 'niri msg action power-off-monitors' \
+        before-sleep 'swaylock -f'
+fi
+
+#------------------------------------------------------------------------------
+# XDG autostart (/etc/xdg/autostart, ~/.config/autostart)
+# With systemd this is done by xdg-desktop-autostart.target (see niri.service).
+# Without it, dex does the same job.
+#------------------------------------------------------------------------------
+if ! has_systemd && command -v dex >/dev/null 2>&1; then
+    dex --autostart --environment niri >/dev/null 2>&1 &
+fi
+
+exit 0
