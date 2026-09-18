@@ -7,3 +7,5 @@ Output/
 Remaster
 doc-*.tar.bz2
 wget-log*
+niri-build/
+
