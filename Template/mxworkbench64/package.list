@@ -109,9 +109,6 @@ gstreamer1.0-pulseaudio
 gthumb
 gtk2-engines-murrine
 guymager
-gvfs
-gvfs-backends
-gvfs-fuse
 gzip
 hardinfo2
 hashcat
@@ -123,7 +120,6 @@ icmpinfo
 idle3-tools
 iftop
 imagemagick
-inotify-tools
 ioping
 iotop
 iperf
@@ -182,7 +178,6 @@ network-manager-openconnect-gnome
 network-manager-openvpn-gnome
 nmap
 nmon
-nvme-cli
 onboard
 open-vm-tools
 openipmi

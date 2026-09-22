@@ -118,7 +118,6 @@ main() {
     local iso_file_dir="$remaster_dir/iso-files"
     local deb_cache_dir="$remaster_dir/deb-cache/archives"
     local pacman_cache_dir="$remaster_dir/pacman-cache/pkg"
-    local dnf_cache_dir="$remaster_dir/dnf-cache"
     local manual_selections=manual-selections
     local exit_file="$output_dir/MUST-EXIT"
     local sign_off_file="$output_dir/SIGN-OFF"
@@ -132,7 +131,7 @@ main() {
     # local live_files_list=$input_dir/live-files.list
     local strict_regex_file="$input_dir/strict-exceptions.regex"
     local lax_regex_file="$input_dir/lax-errors.regex"
-    local -a regex_files=("$lax_regex_file" "$strict_regex_file")
+    local regex_files="$lax_regex_file $strict_regex_file"
     local theme_dir="$script_dir/Themes"
     local root_path="/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:/opt/bin"
     local template
@@ -160,7 +159,7 @@ main() {
             [$short_stack][$short_stack]*)
                 if [[ $arg =~ ^[$short_stack]+$ ]]; then
                     # shellcheck disable=SC2046
-                    set -- $(sed -r 's/([a-zA-Z0-9])/ -\1 /g' <<<"$arg") "$@"
+                    set -- $(sed -r 's/([a-zA-Z])/ -\1 /g' <<<"$arg") "$@"
                     continue
                 fi;;
         esac
@@ -300,20 +299,6 @@ main() {
     SUDO=sudo
     (( UID == 0 )) && SUDO=
 
-    # Speed up failed loopback connections during package installs: some
-    # postinst scripts poll a service (e.g. cups) that isn't running in the
-    # chroot, and on some hosts (seen on WSL2) a closed IPv4 loopback port
-    # doesn't get an instant refusal, so the default SYN-retry timeout can
-    # stretch a failed connect out to ~2 minutes. Lower it for the duration
-    # of this build; restored in on_exit(). Only the top-level (non-chroot)
-    # invocation does this -- the re-invoked chroot process (stage 4+) would
-    # otherwise restore it prematurely when *it* exits.
-    if [[ "$script_dir" != "$build_dir" ]]; then
-        ORIG_TCP_SYN_RETRIES=$(cat /proc/sys/net/ipv4/tcp_syn_retries 2>/dev/null)
-        [[ -n $ORIG_TCP_SYN_RETRIES ]] \
-            && $SUDO sysctl -q -w net.ipv4.tcp_syn_retries=2 2>/dev/null
-    fi
-
     [[ -n $show_parts || -n $show_stages ]] && exit
 
     local normal_defaults="$input_dir/defaults $input_dir/defaults-local"
@@ -329,7 +314,6 @@ main() {
     set_output_paths() {
         # shellcheck disable=SC2153
         local work_name="$DISTRO_NAME-${DISTRO_VERSION}-$ISO_ARCH"
-        work_name="${work_name// /_}"
         [[ ${DISTRO_FAMILY:-debian} = debian ]] && work_name="$work_name-$DEBIAN_RELEASE"
         [[ "$DISTRO_NAME" = antiX ]] && work_name="$work_name-$ISO_FLAV"
         output_dir="$script_dir/Output/$work_name"
@@ -443,22 +427,29 @@ main() {
     while true; do
 
         # Read previous output files and set the stage
-        for stage in $all_stages; do
-            output_file="$output_dir/stage-$stage.out"
-            [[ -r "$output_file" ]] || break
-            [[ -n $start_from ]] && (( stage == start_from )) && break
-            # shellcheck disable=SC1090
-            source "$output_file"
-        done
+        if [[ -n $start_from ]]; then
+            stage=$start_from
+            # Source all previous stage files to get full state
+            for ((s=0; s<=stage; s++)); do
+                output_file="$output_dir/stage-$s.out"
+                # shellcheck disable=SC1090
+                [[ -r "$output_file" ]] && source "$output_file"
+            done
+        else
+            for stage in $all_stages; do
+                output_file="$output_dir/stage-$stage.out"
+                [[ -r "$output_file" ]] || break
+                # shellcheck disable=SC1090
+                source "$output_file"
+            done
+        fi
 
         # Variables derived from output files
         local full_distro_name="$DISTRO_NAME-${DISTRO_VERSION}_$ISO_ARCH"
-        full_distro_name="${full_distro_name// /_}"
         [[ "$DISTRO_NAME" = antiX ]] && full_distro_name="$full_distro_name-$ISO_FLAV"
 
         local fancy_name="$full_distro_name $CODE_NAME $RELEASE_DATE"
         local work_name="$DISTRO_NAME-${DISTRO_VERSION}-$ISO_ARCH"
-        work_name="${work_name// /_}"
         [[ ${DISTRO_FAMILY:-debian} = debian ]] && work_name="$work_name-$DEBIAN_RELEASE"
         [[ "$DISTRO_NAME" = antiX ]] && work_name="$work_name-$ISO_FLAV"
         local work_dir="$remaster_dir/work/$work_name"
@@ -480,8 +471,6 @@ main() {
         local deboot_cache_opts
         if [[ ${DISTRO_FAMILY:-debian} = arch ]]; then
             deboot_cache_opts="pacstrap $ARCH $sqfs_dir"
-        elif [[ ${DISTRO_FAMILY:-debian} = fedora ]]; then
-            deboot_cache_opts="dnf_bootstrap $ARCH $sqfs_dir"
         else
             deboot_cache_opts="debootstrap $ARCH-$DEBIAN_RELEASE $sqfs_dir"
         fi
@@ -491,8 +480,6 @@ main() {
             debian) template="$script_dir/Template" ;;
               arch) template="$script_dir/Template/Arch"
                     [[ -d "$template" ]] || fatal "Missing Arch templates at $(pq "$template")" ;;
-             fedora) template="$script_dir/Template/Fedora"
-                    [[ -d "$template" ]] || fatal "Missing Fedora templates at $(pq "$template")" ;;
                  *) fatal "Unknown DISTRO_FAMILY: $(pqw "$DISTRO_FAMILY")" ;;
         esac
         local manual_selections_template=$template/COMMON/$manual_selections
@@ -560,22 +547,7 @@ main_case() {
          1) do_stage_1   ;;
          2) do_stage_2   ;;
          3) do_stage_3   ;;
-         4) # Auto-prep chroot if starting from -4 (skipping Stage 3)
-            if [[ $(readlink -f /proc/1/root) != / ]] && ! mountpoint -q "$sqfs_dir/proc" 2>/dev/null; then
-                say "Preparing chroot for stage 4"
-                cd "$script_dir" || my_exit
-                prep_chroot
-                cd "$OLDPWD" || my_exit
-                local -a args=(-4)
-                [[ -n $auto_mode    ]] && args+=(--auto)
-                [[ -n $interactive  ]] && args+=(--interactive)
-                [[ -n $quiet_mode   ]] && args+=(--quiet)
-                [[ -n $manual_mode  ]] && args+=(--manual)
-                [[ $color_mode != high ]] && args+=(--COLOR="$color_mode")
-                $SUDO chroot "$sqfs_dir" "$build_dir/$ME" "${args[@]}"
-                my_exit
-            fi
-            do_stage_4   ;;
+         4) do_stage_4   ;;
          5) do_stage_5   ;;
          6) do_stage_6   ;;
          7) do_stage_7   ;;
@@ -651,8 +623,6 @@ Remaster_Blurb
         debian) template="$script_dir/Template" ;;
           arch) template="$script_dir/Template/Arch"
                 [[ -d "$template" ]] || error "Missing Arch templates at $(pq "$template")" ;;
-         fedora) template="$script_dir/Template/Fedora"
-                [[ -d "$template" ]] || error "Missing Fedora templates at $(pq "$template")" ;;
              *) error "Unknown DISTRO_FAMILY: $(pqw "$DISTRO_FAMILY")" ;;
     esac
 
@@ -660,7 +630,6 @@ Remaster_Blurb
     case $DISTRO_FAMILY in
         debian) require_programs debootstrap apt-get dpkg ;;
           arch) require_arch_host_tools ;;
-        fedora) require_fedora_host_tools ;;
     esac
 
     # Fill in default value
@@ -684,7 +653,7 @@ Remaster_Blurb
                     "Single (the one default locale)"
     fi
 
-    if [[ $DISTRO_FAMILY = arch || $DISTRO_FAMILY = fedora ]]; then
+    if [[ $DISTRO_FAMILY = arch ]]; then
         [[ ${ARCH:-} = x86_64 ]] || choose "arch" ARCH x86_64
     else
         [[ ${ARCH:-} = i386 || ${ARCH:-} = amd64 ]] || choose "arch" ARCH i386 amd64
@@ -779,7 +748,6 @@ Remaster_Blurb
     : > "$did_stage_file"
 
     local full_distro_name=$DISTRO_NAME-${DISTRO_VERSION}_$ISO_ARCH
-    full_distro_name=${full_distro_name// /_}
     [[ $DISTRO_NAME = antiX ]] && full_distro_name=$full_distro_name-$ISO_FLAV
     local iso_file=$full_distro_name${ISO_SUFFIX:+_$ISO_SUFFIX}.iso
 
@@ -791,12 +759,8 @@ Remaster_Blurb
     elif [[ ${DISTRO_FAMILY:-debian} = arch ]]; then
         # Create directories for Arch packages
         mkdir -p "$script_dir/Deb/Arch"
-        mkdir -p "$script_dir/Deb/ArchKDE"
         mkdir -p "$script_dir/Deb/ArchXfce"
-    elif [[ ${DISTRO_FAMILY:-debian} = fedora ]]; then
-        # Create directories for Fedora RPMs
-        mkdir -p "$script_dir/Deb/FedoraXfce"
-        mkdir -p "$script_dir/Deb/FedoraKDE"
+        mkdir -p "$script_dir/Deb/ArchKDE"
     fi
 
     local full_iso_file=$iso_file_dir/$iso_file
@@ -885,16 +849,6 @@ do_stage_2() {
             return
         fi
 
-        local pacman_conf_src mirror_src
-        if ! is_arch_host; then
-            : "${PACMAN_CONF:=Input/arch/pacman.conf}"
-            : "${PACMAN_MIRRORLIST:=Input/arch/mirrorlist}"
-            pacman_conf_src=$script_dir/${PACMAN_CONF#./}
-            mirror_src=$script_dir/${PACMAN_MIRRORLIST#./}
-            [[ -r "$pacman_conf_src" ]] || fatal "Missing PACMAN_CONF: $(pqw "$PACMAN_CONF")"
-            [[ -r "$mirror_src" ]] || fatal "Missing PACMAN_MIRRORLIST: $(pqw "$PACMAN_MIRRORLIST")"
-        fi
-
         # shellcheck disable=SC2086
         if ! restore_cache $deboot_cache_opts; then
             umount_chroot
@@ -913,10 +867,15 @@ do_stage_2() {
                 say "Using host pacman configuration (Arch Linux)"
                 # shellcheck disable=SC2086
                 $SUDO pacstrap -c -G -M "$sqfs_dir" $PACSTRAP_PACKAGES 2>&1 | tr '\r' '\n'
-                local pacstrap_ret=${PIPESTATUS[0]}
-                (( pacstrap_ret == 0 )) || fatal "pacstrap failed"
             else
                 # On Debian/MX host, provide dedicated config + mirrors
+                : "${PACMAN_CONF:=Input/arch/pacman.conf}"
+                : "${PACMAN_MIRRORLIST:=Input/arch/mirrorlist}"
+                local pacman_conf_src=$script_dir/${PACMAN_CONF#./}
+                local mirror_src=$script_dir/${PACMAN_MIRRORLIST#./}
+                [[ -r "$pacman_conf_src" ]] || fatal "Missing PACMAN_CONF: $(pqw "$PACMAN_CONF")"
+                [[ -r "$mirror_src" ]] || fatal "Missing PACMAN_MIRRORLIST: $(pqw "$PACMAN_MIRRORLIST")"
+
                 local pacman_work=$work_dir/pacman
                 $SUDO mkdir -p "$pacman_work"
                 local pacman_conf=$pacman_work/pacman.conf
@@ -937,8 +896,8 @@ do_stage_2() {
                 fi
 
                 # shellcheck disable=SC2086
-                pacstrap_with_keyring_retry "$pacman_conf" "$sqfs_dir" $PACSTRAP_PACKAGES
-                local pacstrap_ret=$?
+                $SUDO pacstrap -C "$pacman_conf" -c -G -M "$sqfs_dir" $PACSTRAP_PACKAGES 2>&1 | tr '\r' '\n'
+                local pacstrap_ret=${PIPESTATUS[0]}
                 (( pacstrap_ret == 0 )) || fatal "pacstrap failed"
             fi
 
@@ -990,97 +949,6 @@ do_stage_2() {
         return
     fi
 
-    #------------------------------------------------------------------------------
-    # Fedora bootstrap (--installroot via dnf)
-    #------------------------------------------------------------------------------
-    if [[ ${DISTRO_FAMILY:-debian} = fedora ]]; then
-        say "Using dnf --installroot (Fedora; experimental)"
-
-        [[ $do_fast ]] && mount_tmpfs
-
-        if [[ -d "$sqfs_dir" ]]; then
-            say "Clear out existing files ..."
-            check_sqfs_dir
-            $SUDO rm -rf "$(dirname "${sqfs_dir:?}")"/squashfs/*
-        fi
-
-        # shellcheck disable=SC2086
-        if restore_cache $chroot_cache_opts; then
-            leave_stage
-            return
-        fi
-
-        # shellcheck disable=SC2086
-        if ! restore_cache $deboot_cache_opts; then
-            umount_chroot
-            check_errors_strict
-            start_timer
-
-            : "${DNF_RELEASEVER:=44}"
-            : "${DNF_BOOTSTRAP_PACKAGES:=filesystem fedora-release kernel-core dracut dracut-live squashfs-tools glibc bash coreutils systemd dnf rpm shadow-utils gawk}"
-            : "${DNF_CONF:=Input/fedora/dnf.conf}"
-            : "${DNF_BASEREPO:=Input/fedora/fedora.repo}"
-
-            local dnf_conf_src=$script_dir/${DNF_CONF#./}
-            local repo_src=$script_dir/${DNF_BASEREPO#./}
-            [[ -r "$dnf_conf_src" ]] || fatal "Missing DNF_CONF: $(pqw "$DNF_CONF")"
-            [[ -r "$repo_src" ]] || fatal "Missing DNF_BASEREPO: $(pqw "$DNF_BASEREPO")"
-
-            local dnf_work=$work_dir/dnf
-            $SUDO mkdir -p "$dnf_work"
-            local dnf_conf=$dnf_work/dnf.conf
-            local yum_repos_dir=$dnf_work/yum.repos.d
-            $SUDO mkdir -p "$yum_repos_dir"
-            $SUDO cp "$repo_src" "$yum_repos_dir/fedora.repo"
-            $SUDO cp "$dnf_conf_src" "$dnf_conf"
-
-            say "dnf --installroot to $(pq "$sqfs_dir") with: $(pq $DNF_BOOTSTRAP_PACKAGES)"
-
-            # shellcheck disable=SC2086
-            $SUDO dnf --config="$dnf_conf" \
-                --releasever="$DNF_RELEASEVER" \
-                --setopt=reposdir="$yum_repos_dir" \
-                --installroot="$sqfs_dir" \
-                --setopt=cachedir="$sqfs_dir/var/cache/dnf" \
-                --nogpgcheck \
-                --assumeyes \
-                install $DNF_BOOTSTRAP_PACKAGES 2>&1 | tr '\r' '\n'
-            local dnf_ret=${PIPESTATUS[0]}
-            (( dnf_ret == 0 )) || fatal "dnf --installroot failed"
-
-            # Basic post-bootstrap setup
-            # Set root password to empty (no password)
-            $SUDO sh -c "printf 'root::0:0:root:/root:/bin/bash\n' >> '$sqfs_dir/etc/passwd'"
-            $SUDO mkdir -p "$sqfs_dir/root"
-
-            # Copy host resolv.conf for chroot DNS
-            $SUDO mkdir -p "$sqfs_dir/etc"
-            $SUDO rm -f "$sqfs_dir/etc/resolv.conf"
-            $SUDO cp -L /etc/resolv.conf "$sqfs_dir/etc/resolv.conf"
-            $SUDO chmod 644 "$sqfs_dir/etc/resolv.conf" 2>/dev/null || true
-
-            # Install the repo config into the target for in-chroot dnf use
-            $SUDO mkdir -p "$sqfs_dir/etc/yum.repos.d"
-            $SUDO cp "$repo_src" "$sqfs_dir/etc/yum.repos.d/fedora.repo"
-
-            end_timer "run dnf --installroot"
-            check_errors_lax
-            umount_chroot
-            [[ -e "$sqfs_dir/bin/bash" ]] || fatal "dnf bootstrap failed (missing /bin/bash)"
-        fi
-
-        report_size "$sqfs_dir"
-        # shellcheck disable=SC2086
-        create_cache $deboot_cache_opts
-
-        say "Customize live system (Fedora)"
-        copy_template_dir squashfs "$sqfs_dir"
-
-        check_errors_reset
-        leave_stage notime
-        return
-    fi
-
     [[ $do_fast ]] && mount_tmpfs
 
     if [[ -d "$sqfs_dir" ]]; then
@@ -1113,7 +981,7 @@ do_stage_2() {
         [[ -n "$exclude_list" ]] && args="$args --exclude=$exclude_list"
         [[ -n "$include_list" ]] && args="$args --include=$include_list"
         [[ -r "$keyring" ]] && args="$args --keyring=$keyring"
-        url="${MIRROR_URL_TEMPLATE/\$LOCAL_MIRROR/$LOCAL_MIRROR}"
+        url="$(eval echo "$MIRROR_URL_TEMPLATE")"
 
         check_errors_strict
         start_timer
@@ -1157,11 +1025,7 @@ do_stage_2() {
 
         umount_chroot
 
-        # Must be fatal: a partial debootstrap (e.g. interrupted after fetching
-        # the package lists but before unpacking the base) leaves a rootfs with
-        # no /bin/bash. If we only warn here, create_cache below would archive
-        # that broken tree, poisoning the shared deboot cache for every flavor.
-        [[ -e "$sqfs_dir/bin/bash" ]] || fatal "debootstrap failed (missing /bin/bash); not caching broken base"
+        [[ -e "$sqfs_dir/bin/bash" ]] || error "debootstrap failed"
     fi
 
     report_size "$sqfs_dir"
@@ -1199,30 +1063,20 @@ do_stage_3() {
 
     prep_chroot
 
-    # This stage must fail if the next stage fails
-    rm "$output_file"
-
     # Put saved PARTIAL file back in the build directory
     [[ -e "$work_dir/$partial_name" ]] \
         && $SUDO mv "$work_dir/$partial_name" "$sqfs_dir$partial_file"
 
-    # Resolve/Pin kernel wildcard now that chroot is prepped and mounted.
-    # This prevents a 'resolution race' where the version could change if
-    # Stage 4 is resumed later, and ensures subsequent stages see the pinned name.
-    local resolved_kernel_file=$sqfs_output_dir/resolved-kernel-name
-    rm -f "$resolved_kernel_file"
-    if [[ $K_NAME =~ \* ]]; then
-        search_for_k_name
-        printf 'K_NAME=%q\n' "$K_NAME" > "$resolved_kernel_file"
-    fi
+    # This stage must fail if the next stage fails
+    rm "$output_file"
 
     # Get realtime log updates from the chroot
-    (tail --pid=$$ -n 0 -f "$sqfs_output_dir/$ME.log" >> "$log_file") &
+    (tail -n 0 -f "$sqfs_output_dir/$ME.log" >> "$log_file") &
     export TAIL_PID_1=$!
 
     if [[ -z $no_log_errors ]]; then
         touch "$err_file"
-        (tail --pid=$$ -n 0 -f "$err_file" > "$sqfs_output_dir/$ME.err") &
+        (tail -n 0 -f "$err_file" > "$sqfs_output_dir/$ME.err") &
         export TAIL_PID_2=$!
     fi
     HOST_HOSTNAME=$(hostname)
@@ -1280,7 +1134,7 @@ do_stage_3() {
         [[ -r "$missing" ]] && cp "$missing" "$work_dir"
     done
 
-    [[ -r "$sqfs_output_dir/package-list.out" ]] && cp "$sqfs_output_dir/package-list.out" "$work_dir"
+    cp "$sqfs_output_dir/package-list.out"        "$work_dir"
     cp "$sqfs_input_dir/strict-exceptions.regex"  "$input_dir"
     cp "$sqfs_input_dir/lax-errors.regex"         "$input_dir"
     cp "$next_output_file"                        "$output_dir"
@@ -1297,10 +1151,6 @@ do_stage_3() {
 # variables.
 #------------------------------------------------------------------------------
 do_stage_4() {
-    local resolved_kernel_file=$output_dir/resolved-kernel-name
-    # shellcheck disable=SC1090
-    [[ -r "$resolved_kernel_file" ]] && source "$resolved_kernel_file"
-
     enter_stage 4 "!Inside of chroot"
     _say_ "$num_co===============================================================$nc"
 
@@ -1316,24 +1166,14 @@ do_stage_4() {
         my_exit
     fi
 
-    if [[ ${DISTRO_FAMILY:-debian} = fedora ]]; then
-        # Ensure chroot is prepared (in case we started from -4, skipping Stage 3)
-        # Inside the chroot, $sqfs_dir is a host path and won't resolve,
-        # so check /proc directly.
-        if ! mountpoint -q /proc 2>/dev/null; then
-            say "Chroot not prepped — running prep_chroot before entering"
-            prep_chroot
-        fi
-        do_stage_4_fedora
-        my_exit
-    fi
-
     [[ -n $K_NAME ]] || error "No K_NAME specified"
 
-    # Kernel wildcard resolution is now handled in Stage 3 to ensure persistence.
-    # We still check here just in case Stage 3 was bypassed or failed to pin it.
-    if [[ $K_NAME =~ \* ]]; then
+    # Resolve kernel wildcard using target repository
+    if [[ $K_NAME =~ \* ]] && do_part 1 "Search for complete kernel name"; then
         search_for_k_name
+        end_part_strict
+    else
+        skip_part 1 "Search for complete kernel name"
     fi
 
     if ! [[ -r $manual_selections_template ]]; then
@@ -1418,13 +1258,10 @@ do_stage_4() {
         end_part_lax
     fi
 
-    # Kernel wildcard resolution is now handled in Stage 3 to ensure persistence.
-    # We still check here just in case Stage 3 was bypassed or failed to pin it.
-    if [[ $K_NAME =~ \* ]] && do_part 2 "Search for complete kernel name (fallback)"; then
-        search_for_k_name
-        end_part_strict
+    if [[ $K_NAME =~ \* ]]; then
+        skip_part 2 "Search for complete kernel name (deferred to Stage 4)"
     else
-        skip_part 2 "Search for complete kernel name (already resolved or not needed)"
+        skip_part 2 "Search for complete kernel name"
     fi
 
     : "${LOCALE:=en_US.UTF-8}"
@@ -1518,15 +1355,14 @@ do_stage_4() {
         end_part_lax
     fi
 
-    local -a debs
-    local cnt
-    mapfile -t debs < <(ls "$build_dir"/Deb/*.deb 2>/dev/null)
-    cnt=${#debs[@]}
+    local debs cnt
+    debs=$(ls $build_dir/Deb/*.deb 2>/dev/null)
+    cnt=$(echo "$debs" | wc -w)
     if (( cnt > 0 )) \
         && do_part 10 "Install latest antiX debs"; then
         psay "$cnt" "Install $(pqn %n) .deb package%s"
 
-        for deb in "${debs[@]}"; do
+        for deb in $debs; do
             say "install $(pq "${deb##*/}")"
             apt-get install "$deb"
         done
@@ -1668,7 +1504,7 @@ do_stage_4() {
         check_errors_lax
     fi
 
-    if do_part 17 "!Update Timezone and hostname"; then
+    if do_part 16 "!Update Timezone and hostname"; then
         if [[  -n $TIME_ZONE && -e /usr/share/zoneinfo/$TIME_ZONE ]]; then
             say "Set timezone and localtime to $(pq "$TIME_ZONE")"
             echo "$TIME_ZONE" > /etc/timezone
@@ -1690,7 +1526,7 @@ do_stage_4() {
         end_part_strict
     fi
 
-    if do_part 18 "!Set up live user accounts"; then
+    if do_part 17 "!Set up live user accounts"; then
         local user
         user=${LIVE_USER:-demo}
         if ! grep -q "^$user:" /etc/passwd; then
@@ -1720,7 +1556,7 @@ do_stage_4() {
         end_part_strict
     fi
 
-    if do_part 19 "Run second apt-get -f install"; then
+    if do_part 18 "Run second apt-get -f install"; then
 
         if [[ $DEBIAN_RELEASE != "wheezy" ]] && is_antiX; then
             # shellcheck disable=SC2086
@@ -1957,37 +1793,15 @@ do_stage_4_arch() {
 
     if do_part 2 "Update repos and do pacman -Syu"; then
         [[ -s /etc/pacman.d/mirrorlist ]] || error "Empty or missing /etc/pacman.d/mirrorlist"
-        # Unconditional: both commands are idempotent, and the guard this
-        # replaces tested whether /etc/pacman.d/gnupg was *empty* rather than
-        # whether it held a master signing key. A keyring with files but no
-        # master key skipped the init, and then every --lsign-key below failed,
-        # the MX Arch one included, for a reason its error message does not
-        # hint at.
-        local ret
-        say "Initialize target pacman keyring"
-        pacman-key --init 2>&1 | tr '\r' '\n'
-        ret=${PIPESTATUS[0]}
-        (( ret == 0 )) || error "pacman-key --init failed"
-        pacman-key --populate archlinux 2>&1 | tr '\r' '\n'
-        ret=${PIPESTATUS[0]}
-        (( ret == 0 )) || error "pacman-key --populate failed"
-        # Trust the MX Arch repository's signing key. It is not part of
-        # archlinux-keyring, and the -Syu below reads that repository's database,
-        # so the key has to be in place first or pacman rejects it as an invalid
-        # signature. Idempotent: skipped once the key is already known.
-        : "${MXARCH_KEY_ID:=442D90008FE173AE}"
-        : "${MXARCH_KEY_URL:=https://arch.mxrepo.com/os/x86_64/mxarch.key}"
-        if ! pacman-key --list-keys "$MXARCH_KEY_ID" &>/dev/null; then
-            say "Import the MX Arch repository signing key"
-            if curl -fsSL "$MXARCH_KEY_URL" -o /tmp/mxarch.key; then
-                pacman-key --add /tmp/mxarch.key 2>&1 | tr '\r' '\n'
-                (( ${PIPESTATUS[0]} == 0 )) || error "pacman-key --add failed for the MX Arch key"
-                pacman-key --lsign-key "$MXARCH_KEY_ID" 2>&1 | tr '\r' '\n'
-                (( ${PIPESTATUS[0]} == 0 )) || error "pacman-key --lsign-key failed for $MXARCH_KEY_ID"
-                rm -f /tmp/mxarch.key
-            else
-                error "Could not fetch the MX Arch repository key from $MXARCH_KEY_URL"
-            fi
+        if [[ ! -d /etc/pacman.d/gnupg ]] || [[ -z $(ls -A /etc/pacman.d/gnupg 2>/dev/null) ]]; then
+            local ret
+            say "Initialize target pacman keyring"
+            pacman-key --init 2>&1 | tr '\r' '\n'
+            ret=${PIPESTATUS[0]}
+            (( ret == 0 )) || error "pacman-key --init failed"
+            pacman-key --populate archlinux 2>&1 | tr '\r' '\n'
+            ret=${PIPESTATUS[0]}
+            (( ret == 0 )) || error "pacman-key --populate failed"
         fi
         # For -Syu we do not need --needed, but it's harmless; keep the wrapper
         # to guarantee --noconfirm and mount setup.
@@ -2360,278 +2174,6 @@ Output
     leave_stage
 }
 
-#------------------------------------------------------------------------------
-# Fedora in-chroot configuration (Stage 4)
-#------------------------------------------------------------------------------
-do_stage_4_fedora() {
-    say "Fedora in-chroot phase (experimental)"
-
-    require_programs dnf rpm dracut useradd usermod groupadd chpasswd ln systemctl mount df awk find
-
-    echo $$ > $build_dir/MY-PID
-    PATH=$build_dir/fake:$PATH
-
-    # shellcheck disable=SC1091
-    [[ -r "$script_dir/ENV_IN" ]] && source "$script_dir/ENV_IN"
-
-    say "Fedora template root: $(pq "$template")"
-    say "Fedora flavour: $(pq "$FLAV") (ISO_FLAV=$(pq "$ISO_FLAV")), base=$(pq "$ISO_RESPIN_OF")"
-
-    SIGN_OFF="$text_co$ME in chroot done$nc"
-    vsay "DEBUG: SIGN_OFF set to: '$SIGN_OFF'"
-
-    : "${DNF_RELEASEVER:=44}"
-    : "${DNF_CACHE_DIR:=/var/cache/dnf}"
-    : "${MIN_FREE_MB:=2048}"
-
-    # Ensure /proc/mounts for systemd/dnf
-    if ! mountpoint -q /proc; then
-        mkdir -p /proc 2>/dev/null || true
-        mount -t proc proc /proc 2>/dev/null || true
-    fi
-    if ! mountpoint -q /sys; then
-        mkdir -p /sys 2>/dev/null || true
-        mount -t sysfs sysfs /sys 2>/dev/null || true
-    fi
-    mkdir -p "$DNF_CACHE_DIR"
-
-    local free_mb
-    free_mb=$(df -Pm "$DNF_CACHE_DIR" | awk 'NR==2{print $4}')
-    [[ -n $free_mb ]] || free_mb=0
-    if (( free_mb < MIN_FREE_MB )); then
-        error "Low free space: ${free_mb}MB available at $DNF_CACHE_DIR (need at least ${MIN_FREE_MB}MB)"
-    fi
-
-# dnf wrapper for use inside chroot
-    # dnf5 requires subcommand-level flags (--skip-unavailable must follow the subcommand)
-    # Only valid for: install, upgrade, remove, downgrade, reinstall, distro-sync
-    fedora_dnf() {
-        local subcmd="$1"
-        shift
-        case $subcmd in
-            install|upgrade|remove|downgrade|reinstall|distro-sync)
-                dnf --releasever="$DNF_RELEASEVER" --assumeyes "$subcmd" --skip-unavailable "$@" 2>&1 | tr '\r' '\n' ;;
-            *)
-                dnf --releasever="$DNF_RELEASEVER" --assumeyes "$subcmd" "$@" 2>&1 | tr '\r' '\n' ;;
-        esac
-        return "${PIPESTATUS[0]}"
-    }
-
-    # PARTIAL file support
-    if [[ ! -f "$script_dir/../Output/$work_name/stage-1.out" ]] && [[ -s "$partial_file" ]]; then
-        rm -f "$partial_file"
-        skip_part 0 "Read PARTIAL file to skip parts done (clean build)"
-    elif [[ -s "$partial_file" ]] && do_part 0 "!Read PARTIAL file to skip parts done"; then
-        local add_skip
-        add_skip=$(join_lines "$partial_file" ",")
-        say "have already processed these parts: $(pq "$add_skip")"
-        if YES_no "Skip these parts this time"; then
-            SKIP_PART="$SKIP_PART${SKIP_PART:+,}$add_skip"
-        else
-            rm -f "$partial_file"
-        fi
-    else
-        skip_part 0 "Read PARTIAL file to skip parts done"
-    fi
-
-    if do_part 1 "!Update repos and do dnf update"; then
-        say "Upgrading all packages with dnf upgrade"
-        fedora_dnf upgrade
-        end_part_lax
-    fi
-
-    : "${LOCALE:=en_US.UTF-8}"
-    if do_part 2 "!Define locales"; then
-        say "Set locale to $(pq "$LOCALE")"
-        rm -rf /etc/locale.conf
-        echo "LANG=$LOCALE" > /etc/locale.conf
-        # Ensure locale is generated
-        localedef -i "${LOCALE%%.*}" -f UTF-8 "$LOCALE" 2>/dev/null || true
-        end_part_lax
-    fi
-
-    if gather_any basic-package && do_part 3 "Install basic packages"; then
-        gather_say basic-package "Install $(pqn %n) basic package%s"
-        # shellcheck disable=SC2206,SC2207
-        local pkgs=( $(compile_pkg_list basic-package exclude-chroot) )
-        if (( ${#pkgs[@]} > 0 )); then
-            fedora_dnf install "${pkgs[@]}" || error "dnf failed installing basic packages"
-        fi
-        end_part_strict
-    else
-        skip_part 3 "Install basic packages"
-    fi
-
-    if do_part 4 "Install kernel & headers"; then
-        : "${K_PKG:=kernel-core}"
-        : "${K_HEADERS_PKG:=kernel-devel}"
-        fedora_dnf install "$K_PKG" "$K_HEADERS_PKG"
-        end_part_strict
-    fi
-
-    # Resolve kernel version from /boot/
-    local kernel_version
-    kernel_version=$(find /boot/ -maxdepth 1 -name 'vmlinuz-*' 2>/dev/null | sort -V | tail -n1 | sed 's|/boot/vmlinuz-||')
-    if [[ -z $kernel_version ]]; then
-        error "No kernel found in /boot/"
-    else
-        say "Detected kernel version: $(pq "$kernel_version")"
-        K_MODVER=$kernel_version
-    fi
-
-    if gather_any package && do_part 5 "Install flavour packages"; then
-        gather_say package "Install $(pqn %n) flavour package%s"
-        # shellcheck disable=SC2206,SC2207
-        local pkgs=( $(compile_pkg_list package exclude-chroot) )
-        if (( ${#pkgs[@]} > 0 )); then
-            fedora_dnf install "${pkgs[@]}" || error "dnf failed installing flavour packages"
-        fi
-        end_part_strict
-    else
-        skip_part 5 "Install flavour packages"
-    fi
-
-    if do_part 6 "Enable common live services"; then
-        if command -v systemctl >/dev/null 2>&1; then
-            systemctl enable NetworkManager.service 2>&1 | tr '\r' '\n' || true
-        fi
-        end_part_lax
-    fi
-
-    if do_part 7 "Build live initramfs with dracut"; then
-        say "Building live initramfs with dracut (${kernel_version})"
-
-        # Ensure dracut live modules are installed
-        say "Ensuring dracut-live and dracut-squash are installed"
-        fedora_dnf install dracut-live dracut-squash 2>&1 | tail -5 || true
-
-        # Mount /run tmpfs so dracut doesn't fail on host-only detection
-        mkdir -p /run
-        mount -t tmpfs tmpfs /run 2>/dev/null || true
-
-        # Note: initramfs is rebuilt in Stage 6 with proper /dev/log setup;
-        # this is a best-effort first pass.
-        dracut --force --no-hostonly --add dmsquash-live \
-            /boot/initramfs-live.img "$kernel_version" 2>&1 | tr '\r' '\n' || true
-        end_part_lax
-    fi
-
-    if gather_any remove && do_part 8 "Remove some packages"; then
-        # shellcheck disable=SC2206,SC2207
-        local pkgs=( $(gather remove) )
-        (( ${#pkgs[@]} > 0 )) && fedora_dnf remove "${pkgs[@]}"
-        end_part_strict
-    fi
-
-    if gather_any add && do_part 9 "Add some packages"; then
-        # shellcheck disable=SC2206,SC2207
-        local pkgs=( $(compile_pkg_list add exclude-chroot) )
-        (( ${#pkgs[@]} > 0 )) && fedora_dnf install "${pkgs[@]}"
-        end_part_lax
-    fi
-
-    # Install local RPMs from /Deb directory (analogous to Arch pkg.tar.zst)
-    local rpms cnt
-    rpms=()
-    for rpm in "$build_dir"/Deb/*.rpm; do
-        [[ $rpm != *'*'* ]] && rpms+=("$rpm")
-    done
-    cnt=${#rpms[@]}
-    if (( cnt > 0 )) && do_part 10 "Install RPM packages from /Deb"; then
-        psay "$cnt" "Install $(pqn %n) RPM package%s"
-        for rpm in "${rpms[@]}"; do
-            say "install $(pq "${rpm##*/}")"
-            rpm --force -U "$rpm" 2>&1 | tr '\r' '\n' || true
-        done
-        end_part_lax
-    else
-        skip_part 10 "Install RPM packages from /Deb"
-    fi
-
-    if do_part 11 "Run dnf clean"; then
-        fedora_dnf clean all
-        rm -rf "${DNF_CACHE_DIR:?}"/* 2>/dev/null || true
-        end_part_lax
-    fi
-
-    if do_part 12 "!Update Timezone and hostname"; then
-        if [[ -n $TIME_ZONE && -e /usr/share/zoneinfo/$TIME_ZONE ]]; then
-            ln -sf "/usr/share/zoneinfo/$TIME_ZONE" /etc/localtime
-        fi
-
-        : "${NEW_HOSTNAME:=federalive}"
-        echo "$NEW_HOSTNAME" > /etc/hostname
-        if command -v hostname >/dev/null 2>&1; then
-            hostname -F /etc/hostname
-        fi
-        end_part_strict
-    fi
-
-    if do_part 15 "!Pre-generate system users and disable first-boot wizard"; then
-        # Pre-generate system users defined in /usr/lib/sysusers.d/
-        if command -v systemd-sysusers >/dev/null 2>&1; then
-            say "Pre-generating system users via systemd-sysusers"
-            systemd-sysusers 2>/dev/null || true
-        fi
-        # Disable initial-setup (first-boot wizard)
-        if command -v systemctl >/dev/null 2>&1; then
-            systemctl disable initial-setup.service 2>/dev/null || true
-            systemctl disable initial-setup-graphical.service 2>/dev/null || true
-            systemctl mask initial-setup.service 2>/dev/null || true
-            systemctl mask initial-setup-graphical.service 2>/dev/null || true
-        fi
-        # Remove initial-setup configuration if it exists
-        rm -f /etc/sysconfig/initial-setup 2>/dev/null || true
-        rm -f /etc/reconfigSys 2>/dev/null || true
-        end_part_lax
-    fi
-
-    if do_part 13 "!Set up live user accounts"; then
-        local user
-        user=${LIVE_USER:-demo}
-        if ! grep -q "^$user:" /etc/passwd; then
-            say "Set up live user account $(pq "$user")"
-            grep -q "^$user:" /etc/group || groupadd "$user"
-            useradd -m -s "${ISO_SHELL:=/bin/bash}" -g "$user" "$user"
-        fi
-
-        gather_say user-groups "Add $(pq "$user") to $(pqn %n) group%s"
-        local group
-        for group in $(gather user-groups); do
-            usermod -a -G "$group" "$user"
-        done
-
-        # No password for live user
-        printf "%s:%s\n" "$user" "" | chpasswd -e 2>/dev/null || true
-        end_part_strict
-    fi
-
-    if do_part 14 "!Clean up dnf and system"; then
-        fedora_dnf clean all 2>/dev/null || true
-        rm -rf /tmp/* 2>/dev/null || true
-        rm -rf /var/tmp/* 2>/dev/null || true
-        # Remove machine-id so it's regenerated on first boot
-        rm -f /etc/machine-id 2>/dev/null || true
-        rm -f /var/lib/dbus/machine-id 2>/dev/null || true
-        # Generate package list for debugging / Stage 6 use
-        rpm -qa --queryformat '%{NAME}\n' 2>/dev/null | sort > "$output_dir/package-list.out" || true
-        end_part_strict
-    fi
-
-    # Write kernel info for Stage 7 (depmod)
-    if [[ -n $kernel_version ]]; then
-        K_MODVER=$kernel_version
-        K_NAME=$kernel_version
-        cat > "$output_file" << Output
-K_NAME="$kernel_version"
-K_MODVER="$kernel_version"
-Output
-    fi
-
-    rm -f "$partial_file"
-    leave_stage
-}
-
 apply_theme() {
     export ISO_ARCH
     local theme=${1:-$THEME}
@@ -2641,7 +2183,7 @@ apply_theme() {
     t_dir=$theme_dir/$THEME
     short_t=$(short_dir "$t_dir")
     [[ ! -d "$t_dir" ]] \
-        && error "Theme directory $(pq "$t_dir") does not exist" && return
+        && error "Theme directory $(pq short_t) does not exist" && return
 
     local script="$t_dir"/theme.sh short_script=$short_t/theme.sh
     [[ ! -e $script ]] && \
@@ -2677,8 +2219,8 @@ do_stage_5() {
 
     if [[ $FLAV = "base" ]]; then
         say "Change fluxbox and icewm menu-applications files"
-        $SUDO mv -f "$sqfs_dir"/usr/share/desktop-menu/.fluxbox/menu-applications-fb "$sqfs_dir"/usr/share/desktop-menu/.fluxbox/menu-applications
-        $SUDO mv -f "$sqfs_dir"/usr/share/desktop-menu/.icewm/menu-applications-ice "$sqfs_dir"/usr/share/desktop-menu/.icewm/menu-applications
+        sudo mv -f "$sqfs_dir"/usr/share/desktop-menu/.fluxbox/menu-applications-fb "$sqfs_dir"/usr/share/desktop-menu/.fluxbox/menu-applications
+        sudo mv -f "$sqfs_dir"/usr/share/desktop-menu/.icewm/menu-applications-ice "$sqfs_dir"/usr/share/desktop-menu/.icewm/menu-applications
     fi
 
     local f wm
@@ -2867,12 +2409,6 @@ do_stage_6() {
         leave_stage
         return
     fi
-
-    if [[ ${DISTRO_FAMILY:-debian} = fedora ]]; then
-        do_stage_6_fedora
-        leave_stage
-        return
-    fi
     # (0) Populate iso dir with boilerplate files
     # (1) Copy flavour-dependent bootloader.cfg files via inheritance
 
@@ -2897,11 +2433,9 @@ do_stage_6() {
     local syslinux_dir="$iso_dir/boot/syslinux"
 
     #remove %OPTIONS% from copied checkmedia.cfg
-    #if they exist
-    if [ -e "$isolinux_dir"/checkmedia.cfg ]; then
-        sed -i 's/%OPTIONS% //' "$isolinux_dir"/checkmedia.cfg
-        sed -i 's/%OPTIONS% //' "$syslinux_dir"/checkmedia.cfg
-    fi
+    sed -i 's/%OPTIONS% //' $isolinux_dir/checkmedia.cfg
+    sed -i 's/%OPTIONS% //' $syslinux_dir/checkmedia.cfg
+
     # Directories with unpacked cpio archives
     local isolinux_cpio="$work_dir/isolinux-cpio"
     local syslinux_cpio="$work_dir/syslinux-cpio"
@@ -2929,8 +2463,8 @@ do_stage_6() {
     # (5)
     say "Fill in bootloader template files"
     local bootloader_data=$output_dir/bootloader-data
-    local _boot_var="${DISTRO_NAME}_LIVE_BOOT_OPTIONS"
-    local boot_options="${!_boot_var}"
+    # shellcheck disable=SC2154
+    eval local boot_options=\$"${DISTRO_NAME}"_LIVE_BOOT_OPTIONS
     # shellcheck disable=SC2154
     cat << Bootloader_Data > "$bootloader_data"
       DISTRO_NAME="$DISTRO_NAME"
@@ -3187,122 +2721,15 @@ Bootloader_Data
 }
 
 #------------------------------------------------------------------------------
-# Fedora ISO directory preparation (Stage 6)
-#------------------------------------------------------------------------------
-do_stage_6_fedora() {
-    require_programs grub-mkrescue
-
-    # Minimal Fedora Live layout:
-    #   /LiveOS/squashfs.img   (created in Stage 7)
-    #   /boot/vmlinuz-linux
-    #   /boot/initramfs-live.img
-    local liveos_dir=$iso_dir/LiveOS
-    local boot_iso_dir=$iso_dir/boot
-
-    mkdir -p "$liveos_dir" "$boot_iso_dir" "$iso_dir/boot/grub"
-
-    # Copy GRUB theme and configuration from template
-    say "Copy GRUB theme and configuration for Fedora ISO"
-    copy_template_dir -u iso "$iso_dir"
-
-    # Copy kernel and initramfs from squashfs
-    local kernel_ver
-    kernel_ver=$(find "$sqfs_dir"/boot/ -maxdepth 1 -name 'vmlinuz-*' 2>/dev/null | sort | head -n1 | sed 's|.*/vmlinuz-||')
-    if [[ -z $kernel_ver ]]; then
-        error "No kernel found in squashfs /boot/"
-    fi
-
-    local kimg=$sqfs_dir/boot/vmlinuz-$kernel_ver
-    local initrd_img=$sqfs_dir/boot/initramfs-live.img
-
-    [[ -e "$kimg" ]] || error "Missing kernel image: $(pqw "vmlinuz-$kernel_ver")"
-
-    # Rebuild initramfs (dracut needs /dev/log which may not exist in the chroot)
-    say "Rebuilding live initramfs..."
-    prep_chroot
-    # Write helper scripts for creating /dev/log and building initramfs
-    $SUDO tee "$sqfs_dir/tmp/mkdevlog.py" > /dev/null << 'PYEOF'
-import socket, os
-try:
-    os.unlink("/dev/log")
-except:
-    pass
-s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-s.bind("/dev/log")
-os.chmod("/dev/log", 0o666)
-PYEOF
-    $SUDO tee "$sqfs_dir/tmp/build-initrd.sh" > /dev/null << 'INITEOF'
-#!/bin/bash
-kver=$(ls /boot/vmlinuz-* 2>/dev/null | head -n1 | sed 's|/boot/vmlinuz-||')
-if [ -L /dev/log ]; then rm -f /dev/log; fi
-python3 /tmp/mkdevlog.py &
-sleep 0.3
-rm -f /boot/initramfs-live.img /tmp/initrd.img
-dracut --force --no-hostonly --add "dmsquash-live" /tmp/initrd.img "$kver" 2>&1
-if [ -f /tmp/initrd.img ] && [ -s /tmp/initrd.img ]; then
-    cp /tmp/initrd.img /boot/initramfs-live.img
-    chmod 644 /boot/initramfs-live.img
-fi
-INITEOF
-    $SUDO chmod +x "$sqfs_dir/tmp/build-initrd.sh"
-    $SUDO chroot "$sqfs_dir" /bin/bash /tmp/build-initrd.sh
-    [[ -s "$sqfs_dir/boot/initramfs-live.img" ]] || error "dracut failed to build initramfs"
-
-    # Copy boot files with archiso-compatible names for unified grub.cfg
-    $SUDO cp "$kimg" "$boot_iso_dir/vmlinuz-linux"
-    $SUDO cp "$initrd_img" "$boot_iso_dir/initramfs-live.img"
-
-    # Provide package list (useful for debugging/remaster workflows)
-    if [[ -r "$work_dir/package-list.out" ]]; then
-        cp "$work_dir/package-list.out" "$liveos_dir/pkglist.txt"
-    fi
-
-    # Process bootloader template variables in grub.cfg
-    : "${ISO_LABEL:=${DISTRO_NAME}-Live}"
-    say "Fill in bootloader template files"
-    local bootloader_data=$output_dir/bootloader-data
-    cat << Bootloader_Data > "$bootloader_data"
-      DISTRO_NAME="$DISTRO_NAME"
-   DISTRO_VERSION="$DISTRO_VERSION"
- FULL_DISTRO_NAME="$full_distro_name"
-         ISO_ARCH="$ISO_ARCH"
-        CODE_NAME="$CODE_NAME"
-             ARCH="$ARCH"
-        ISO_LABEL="$ISO_LABEL"
-     RELEASE_DATE="$RELEASE_DATE"
-Bootloader_Data
-
-    # Apply template substitutions to grub.cfg and theme files
-    if [[ -f "$iso_dir/boot/grub/grub.cfg" ]]; then
-        "$tools"/bootloader-template -i --data="$bootloader_data" "$iso_dir/boot/grub/grub.cfg"
-    fi
-    if [[ -f "$iso_dir/boot/grub/theme/uefi.txt" ]]; then
-        sed -i "s/%DISTRO%/${DISTRO_NAME}/g" "$iso_dir/boot/grub/theme/uefi.txt"
-        sed -i "s/%ASCII_CODE_NAME%/${CODE_NAME}/g" "$iso_dir/boot/grub/theme/uefi.txt"
-    fi
-    if [[ -f "$iso_dir/boot/grub/theme/bios.txt" ]]; then
-        sed -i "s/%DISTRO%/${DISTRO_NAME}/g" "$iso_dir/boot/grub/theme/bios.txt"
-        sed -i "s/%ASCII_CODE_NAME%/${CODE_NAME}/g" "$iso_dir/boot/grub/theme/bios.txt"
-    fi
-    if [[ -f "$iso_dir/boot/grub/theme/help.txt" ]]; then
-        "$tools"/bootloader-template -i --data="$bootloader_data" "$iso_dir/boot/grub/theme/help.txt"
-    fi
-}
-
-#------------------------------------------------------------------------------
 # Stage 7 creates the squashfs file
 #------------------------------------------------------------------------------
 do_stage_7() {
     enter_stage 7 "Create squashfs file"
     umount_chroot
 
-    # Remove the policy-rc.d installed in prep_chroot() so the shipped live
-    # system boots with normal service-start behavior.
-    $SUDO rm -f "$sqfs_dir/usr/sbin/policy-rc.d"
-
     say "Run depmod one last time"
-    if [[ ${DISTRO_FAMILY:-debian} = arch ]] || [[ ${DISTRO_FAMILY:-debian} = fedora ]]; then
-        [[ -n $K_MODVER ]] || error "Missing K_MODVER for $(pqw "$DISTRO_FAMILY") depmod"
+    if [[ ${DISTRO_FAMILY:-debian} = arch ]]; then
+        [[ -n $K_MODVER ]] || error "Missing K_MODVER for Arch depmod"
         $SUDO depmod --basedir "$sqfs_dir" "$K_MODVER"
     else
         $SUDO depmod --basedir "$sqfs_dir" "$K_NAME"
@@ -3325,7 +2752,7 @@ do_stage_7() {
         [[ -d $sqfs_dir/etc/skel/.cache/fontconfig ]] || $SUDO mkdir -p "$sqfs_dir"/etc/skel/.cache/fontconfig
 
         $SUDO rm -f "$sqfs_dir"/etc/skel/.cache/fontconfig/*
-        [[ -d "$sqfs_dir/var/cache/fontconfig" ]] && $SUDO cp "$sqfs_dir"/var/cache/fontconfig/* "$sqfs_dir"/etc/skel/.cache/fontconfig/
+        $SUDO cp "$sqfs_dir"/var/cache/fontconfig/* "$sqfs_dir"/etc/skel/.cache/fontconfig/
     fi
 
     if  [[ -n $zstd_override ]]; then
@@ -3348,11 +2775,6 @@ do_stage_7() {
         $SUDO mkdir -p "$(dirname "$linuxfs_file")"
         say "Exclude /Build from Arch squashfs payload"
         mksquash_opts+=(-e Build)
-    elif [[ ${DISTRO_FAMILY:-debian} = fedora ]]; then
-        linuxfs_file=$iso_dir/LiveOS/squashfs.img
-        $SUDO mkdir -p "$(dirname "$linuxfs_file")"
-        say "Exclude /Build from Fedora squashfs payload"
-        mksquash_opts+=(-e Build)
     else
         linuxfs_file=$iso_dir/antiX/linuxfs
     fi
@@ -3362,34 +2784,25 @@ do_stage_7() {
     #                                                    262144 = 0x40000
     #$SUDO mksquashfs $sqfs_dir $linuxfs_file -comp xz -b 262144
 
-    # Also capture uncompressed filesystem output into a variable and place
-    # that in a file in the SQFILE_DIR location.
-    local output
-    output=$(mktemp --tmpdir "mksquashfs_$work_name.XXXXXX") \
-        || error "Could not create mksquashfs temporary output file"
+#also capture uncompressed filesystem output into a variable and place that in a file in the SQFILE_DIR location
+
+    local output="/tmp/mksquashfs_$work_name"
     local UNCOMPRESSEDSIZE_FILE UNCOMPRESSEDSIZE
     if [[ ${DISTRO_FAMILY:-debian} = arch ]]; then
         UNCOMPRESSEDSIZE_FILE="$iso_dir/arch/$ARCH/airootfs.info"
-    elif [[ ${DISTRO_FAMILY:-debian} = fedora ]]; then
-        UNCOMPRESSEDSIZE_FILE="$iso_dir/LiveOS/squashfs.img.info"
     else
         UNCOMPRESSEDSIZE_FILE="$iso_dir/antiX/linuxfs.info"
     fi
     $SUDO unbuffer -p mksquashfs "$sqfs_dir" "$linuxfs_file" "${mksquash_opts[@]}" -progress | tee "$output"
-    local mksquashfs_ret=${PIPESTATUS[0]}
-    (( mksquashfs_ret == 0 )) || fatal "mksquashfs failed"
     UNCOMPRESSEDSIZE=$(grep "uncompressed filesystem" "$output" | cut -d"(" -f2 | cut -d" " -f1)
     echo "UncompressedSizeKB=$UNCOMPRESSEDSIZE">"$UNCOMPRESSEDSIZE_FILE"
-    rm -f "$output"
+    rm "$output"
     local size
     size=$(du_size "$linuxfs_file")
     end_timer "create $(pqn "$size") squashfs file"
     if [[ ${DISTRO_FAMILY:-debian} = arch ]]; then
         # archiso boot hooks verify airootfs.sfs using airootfs.sha512
         (cd "$(dirname "$linuxfs_file")" && sha512sum "$(basename "$linuxfs_file")" > airootfs.sha512)
-    elif [[ ${DISTRO_FAMILY:-debian} = fedora ]]; then
-        # Use SHA256 for Fedora (common Fedora Live practice)
-        (cd "$(dirname "$linuxfs_file")" && sha256sum "$(basename "$linuxfs_file")" > squashfs.img.sha256)
     else
         md5sum_file "$linuxfs_file"
     fi
@@ -3415,81 +2828,51 @@ do_stage_8() {
     local full_iso_file=$iso_file_dir/$iso_file
     say "Build the live $(pq "$iso_file") file"
 
-    if [[ ${DISTRO_FAMILY:-debian} = arch ]] || [[ ${DISTRO_FAMILY:-debian} = fedora ]]; then
-        require_programs grub-mkrescue xorriso unshare mount umount find mktemp
+    if [[ ${DISTRO_FAMILY:-debian} = arch ]]; then
+        require_programs grub-mkrescue
         start_timer
         : "${ISO_LABEL:=${DISTRO_NAME}-Live}"
         say "Using $(pq grub-mkrescue) to make ISO (label: $(pq "$ISO_LABEL"))"
 
-        # Create hybrid BIOS+UEFI ISO using grub-mkrescue.
-        # We use a mount namespace to safely overlay GRUB modules from the squashfs
-        # over the host's /usr/lib/grub without actually modifying the host filesystem.
-        say "Building ISO with grub-mkrescue (hybrid BIOS+UEFI)..."
-        local grub_module_dir=$sqfs_dir/usr/lib/grub
-        local xorriso_path
-        xorriso_path=$(PATH=$root_path command -v xorriso)
+        # Temporarily overlay GRUB modules from squashfs for hybrid BIOS+UEFI ISO
+        # grub-mkrescue auto-detects platforms in /usr/lib/grub/, so we temporarily
+        # make squashfs modules available there
+        local host_grub_backup="/usr/lib/grub-host-backup-$$"
+        local restore_host_grub=false
 
-        if [[ -d "$grub_module_dir/i386-pc" ]]; then
-            say "Use GRUB modules from squashfs for hybrid BIOS+UEFI boot"
-            say "  BIOS (i386-pc) modules available"
-            [[ -d "$grub_module_dir/x86_64-efi" ]] && say "  UEFI (x86_64-efi) modules available"
+        if [[ -d "$sqfs_dir/usr/lib/grub/i386-pc" ]]; then
+            say "Temporarily install GRUB modules from squashfs for hybrid BIOS+UEFI boot"
 
-            # shellcheck disable=SC2016
-            $SUDO unshare -m --propagation private bash -c '
-                set -e
-                grub_module_dir=$1
-                xorriso_path=$2
-                full_iso_file=$3
-                iso_label=$4
-                iso_dir=$5
-                tmp_dir=
-                grub_src=
-                orig_lib=
-                mounted_usr_lib=
+            # Backup existing host GRUB if present
+            if [[ -d "/usr/lib/grub" ]]; then
+                $SUDO mv "/usr/lib/grub" "$host_grub_backup"
+                restore_host_grub=true
+            fi
 
-                cleanup_grub_mounts() {
-                    local status=$?
-                    umount /usr/lib/grub 2>/dev/null || true
-                    [[ -n $mounted_usr_lib ]] && umount /usr/lib 2>/dev/null || true
-                    [[ -n $grub_src ]] && umount "$grub_src" 2>/dev/null || true
-                    [[ -n $orig_lib ]] && umount "$orig_lib" 2>/dev/null || true
-                    [[ -n $tmp_dir ]] && rm -rf "$tmp_dir"
-                    exit "$status"
-                }
-                trap cleanup_grub_mounts EXIT
+            # Symlink squashfs GRUB modules to standard location
+            $SUDO ln -s "$sqfs_dir/usr/lib/grub" "/usr/lib/grub"
 
-                if [[ -d /usr/lib/grub && ! -L /usr/lib/grub ]]; then
-                    mount --bind "$grub_module_dir" /usr/lib/grub
-                else
-                    tmp_dir=$(mktemp -d /tmp/build-iso-grub.XXXXXX)
-                    grub_src=$tmp_dir/grub-modules
-                    orig_lib=$tmp_dir/orig-lib
-                    merged_lib=$tmp_dir/merged-lib
-                    mkdir -p "$grub_src" "$orig_lib" "$merged_lib/grub"
-                    mount --bind "$grub_module_dir" "$grub_src"
-                    mount --bind /usr/lib "$orig_lib"
-                    find "$orig_lib" -mindepth 1 -maxdepth 1 ! -name grub \
-                        -exec ln -s "{}" "$merged_lib/" ";"
-                    mount --bind "$merged_lib" /usr/lib
-                    mounted_usr_lib=true
-                    mount --bind "$grub_src" /usr/lib/grub
-                fi
-
-                GRUB_MKRESCUE_XORRISO="$xorriso_path" grub-mkrescue \
-                    --modules="iso9660 normal" \
-                    -o "$full_iso_file" \
-                    -volid "$iso_label" \
-                    "$iso_dir" 2>&1
-            ' bash "$grub_module_dir" "$xorriso_path" "$full_iso_file" "$ISO_LABEL" "$iso_dir"
+            [[ -d "/usr/lib/grub/i386-pc" ]] && say "  BIOS (i386-pc) modules available"
+            [[ -d "/usr/lib/grub/x86_64-efi" ]] && say "  UEFI (x86_64-efi) modules available"
         else
             warn "Missing BIOS GRUB modules in squashfs - ISO will be UEFI-only"
-            GRUB_MKRESCUE_XORRISO="$xorriso_path" grub-mkrescue \
-                --modules="iso9660 normal" \
-                -o "$full_iso_file" \
-                -volid "$ISO_LABEL" \
-                "$iso_dir" 2>&1
         fi
+
+        # Create hybrid BIOS+UEFI ISO using auto-detected platforms
+        GRUB_MKRESCUE_XORRISO="$(which xorriso)" grub-mkrescue \
+            --modules="iso9660 normal" \
+            -o "$full_iso_file" \
+            -volid "$ISO_LABEL" \
+            "$iso_dir" 2>&1
         local mkrescue_result=$?
+
+        # Restore original host GRUB
+        if [[ -L "/usr/lib/grub" ]]; then
+            $SUDO rm "/usr/lib/grub"
+        fi
+        if [[ $restore_host_grub == true ]]; then
+            $SUDO mv "$host_grub_backup" "/usr/lib/grub"
+        fi
 
         [[ $mkrescue_result -eq 0 ]] || error "iso file creation failed"
         size=$(du_size "$full_iso_file")
@@ -3511,7 +2894,6 @@ do_stage_8() {
         leave_stage
         echo "$text_co$ME$bold_co done$nc" > "$sign_off_file"
         [[ -n $full_auto ]]  || my_exit
-        return
     fi
 
     local file full
@@ -3600,10 +2982,9 @@ do_stage_9() {
 
     enter_stage 9 "Clean up and prepare to start over"
 
-    local s
-    local -a links=()
+    local s links
     for s in initrd iso sqfs work; do
-        [[ -L $script_dir/$s ]] && links+=("$script_dir/$s")
+        [[ -L $script_dir/$s ]] && links="$links $script_dir/$s"
     done
 
     umount_tmpfs
@@ -3614,7 +2995,7 @@ do_stage_9() {
     if [[ -n $delete_all ]]; then
         say "Delete entire work directory $(pq "$rel_work_dir")"
         $SUDO rm -rf "${work_dir:?}"
-        rm -f "${links[@]}"
+        [[ -n $links ]] && rm "$links"
 
     elif [[ -n $delete_mode ]]; then
         say "Delete squashfs directory $(pq "$rel_work_dir"/squashfs)"
@@ -3623,12 +3004,12 @@ do_stage_9() {
 
         if yes_NO "Delete everything else in $(pq "$rel_work_dir")"; then
             $SUDO rm -rf "${work_dir:?}"
-            rm -f "${links[@]}"
+            [[ -n $links ]] && rm "$links"
         fi
 
     elif yes_NO "Delete entire work directory $(pq "$rel_work_dir")"; then
         $SUDO rm -rf "${work_dir:?}"
-        rm -f "${links[@]}"
+        [[ -n $links ]] && rm "$links"
 
     elif yes_NO "Delete squashfs directory $(pq "$rel_work_dir"/squashfs)"; then
         $SUDO rm -rf "${sqfs_dir:?}"
@@ -3702,10 +3083,9 @@ mount_tmpfs() {
         say "tmpfs is already in use"
         return
     fi
-    local cache free swap k v
-    while IFS='=' read -r k v; do
-        case $k in free|cache|swap) printf -v "$k" '%s' "$v" ;; esac
-    done < <(get_cache_free_swap)
+    local cache free swap
+    # shellcheck disable=SC2046
+    eval $(get_cache_free_swap)
     say "The tmpfs will require $(pqn ${needed}) meg of RAM"
     display_cache_free_swap "$cache" "$free" "$swap"
 
@@ -3871,8 +3251,6 @@ _check_errors_() {
 
         elif [[ $type = STRICT ]]; then
             errors=$(tail -n +"$ERROR_OFFSET" "$err_file" | grep -Ev ${flag:+"$flag"} "^\s*$")
-        else
-            errors=
         fi
 
         [[ -z $errors ]] && check_errors_reset && return
@@ -3891,10 +3269,6 @@ _check_errors_() {
         [[ -n $ask_errors ]] || break
         YES_no "Retry"    || break
         read_error_regexes
-        case $type in
-            STRICT) regex=$STRICT_EXCEPTIONS ;;
-               LAX) regex=$LAX_ERRORS ;;
-        esac
     done
 
     check_errors_reset
@@ -4094,12 +3468,8 @@ Get_Free
 
 display_cache_free_swap() {
     local cache=$1 free=$2 swap=$3
-    if (( $# != 3 )); then
-        local k v
-        while IFS='=' read -r k v; do
-            case $k in free|cache|swap) printf -v "$k" '%s' "$v" ;; esac
-        done < <(get_cache_free_swap)
-    fi
+    # shellcheck disable=SC2046
+    (( $# == 3 )) || eval $(get_cache_free_swap)
     say_fmt "Free Mem"  "$free"
     say_fmt "Free Swap" "$swap"
     say_fmt "Cached"    "$cache"
@@ -4153,22 +3523,12 @@ search_for_k_name() {
             my_exit
         fi
     else
-        # We're outside chroot - use chroot to search target repository
-        say "Outside chroot, using target system's package cache"
-        if [[ -d "$sqfs_dir/var/lib/apt/lists" ]]; then
-            # Ensure the chroot has an updated cache if possible
-            $SUDO chroot "$sqfs_dir" apt-get update -qq 2>/dev/null || true
-            name=$($SUDO chroot "$sqfs_dir" apt-cache search "^linux-image-$search_name$" | cut -d" " -f1 | grep -vE "\-(dbg|unsigned|signed-template|cloud|rt)" | sort -V | tail -1)
-        fi
-
+        # We're outside chroot - fallback to host system
+        say "Running on host system, using host package cache"
+        name=$(apt-cache search "^linux-image-$search_name$" | cut -d" " -f1 | grep -vE "\-(dbg|unsigned|signed-template|cloud|rt)" | sort -V | tail -1)
         if [[ -z $name ]]; then
-            # Fallback to host system if chroot search failed
-            say "Falling back to host system package cache"
-            name=$(apt-cache search "^linux-image-$search_name$" | cut -d" " -f1 | grep -vE "\-(dbg|unsigned|signed-template|cloud|rt)" | sort -V | tail -1)
-        fi
-
-        if [[ -z $name ]]; then
-            warn "No kernel matching $(pqw "$K_NAME") found."
+            warn "No kernel matching $(pqw "$K_NAME") found. Possible kernels:"
+            apt-cache search linux-image-.\*-antix | cut -d" " -f1
             my_exit
         fi
     fi
@@ -4241,17 +3601,14 @@ apt_get_packages() {
     temp_output=$(mktemp)
     local simulation_output
     local missing_packages=""
-    local sim_code=0
 
-    # Run simulation with -s flag and LC_ALL=C for consistent parsing
+    # Run simulation with -s flag
     # shellcheck disable=SC2086
-    echo "$pkg_list" | LC_ALL=C xargs apt-get $APT_GET_OPTS -s "$@" > "$temp_output" 2>&1
-    sim_code=$?
+    echo "$pkg_list" | xargs apt-get $APT_GET_OPTS -s "$@" > "$temp_output" 2>&1
     simulation_output=$(cat "$temp_output")
     rm -f "$temp_output"
 
     # Parse simulation output to find missing packages
-    # Patterns cover typical LC_ALL=C apt output
     missing_packages=$(sed -n -E "s/.*Unable to locate package ([^ ]+).*/\1/p" <<<"$simulation_output" | tr -d "'")
 
     # Try alternative patterns for missing packages
@@ -4280,7 +3637,7 @@ $missing_packages"
         local available_packages="$pkg_list"
         # Remove missing packages from the list
         for missing_pkg in $missing_packages; do
-            available_packages=$(tr ' ' '\n' <<<"$available_packages" | grep -vxF -- "$missing_pkg" | tr '\n' ' ')
+            available_packages=$(sed -e "s/\b$missing_pkg\b//g" -e 's/  */ /g' -e 's/^ *//;s/ *$//' <<<"$available_packages")
         done
 
         local available_cnt
@@ -4296,27 +3653,6 @@ $missing_packages"
             echo "$missing_pkg"
         done > /Build/missing-"$label".list
         pkg_list="$available_packages"
-
-        # Re-run the simulation on the pruned list: apt aborts at "Unable to
-        # locate" before resolving dependencies, so dependency problems only
-        # surface once the missing packages are removed
-        temp_output=$(mktemp)
-        # shellcheck disable=SC2086
-        echo "$pkg_list" | LC_ALL=C xargs apt-get $APT_GET_OPTS -s "$@" > "$temp_output" 2>&1
-        sim_code=$?
-        simulation_output=$(cat "$temp_output")
-        rm -f "$temp_output"
-    fi
-
-    # A simulation that still fails means apt can locate every package but
-    # cannot install the set, typically due to unmet/conflicting dependencies
-    if (( sim_code != 0 )); then
-        local unmet
-        unmet=$(sed -n '/unmet dependencies/,$p' <<<"$simulation_output")
-        [[ -n $unmet ]] || unmet=$simulation_output
-        echo "$unmet" > /Build/unmet-"$label".txt
-        say_in "$high_co" "$unmet"
-        fatal "Cannot install $label packages due to the dependency problems above"
     fi
 
     local remaining_packages="$pkg_list"
@@ -4336,9 +3672,8 @@ $missing_packages"
         local exit_code
 
         # Run apt-get with tee to show output in real-time and capture to file
-        # Enforce LC_ALL=C for consistent error identification
         # shellcheck disable=SC2086
-        echo "$remaining_packages" | LC_ALL=C xargs apt-get $APT_GET_OPTS "$@" 2>&1 | tee "$temp_output"
+        echo "$remaining_packages" | xargs apt-get $APT_GET_OPTS "$@" 2>&1 | tee "$temp_output"
         exit_code=${PIPESTATUS[1]}
 
         # Read the captured output for error parsing
@@ -4376,27 +3711,9 @@ $missing_packages"
                 sed "s/Package '\\([^']*\\)' has no installation candidate/\\1/")
         fi
 
-        # Try pattern for a fetch failure (stale repo index, e.g. the pool
-        # file was replaced/removed after our apt-get update but before this
-        # install ran): "E: Failed to fetch .../pool/.../pkg_version_arch.deb  404  Not Found [...]"
         if [[ -z $problem_pkg ]]; then
-            problem_pkg=$(echo "$install_output" | \
-                grep -oE "Failed to fetch [^ ]+\.deb" | \
-                head -1 | \
-                sed -E "s#.*/([a-zA-Z0-9.+-]+)_[^_/]+_[^_/]+\.deb\$#\\1#")
-        fi
-
-        if [[ -z $problem_pkg ]]; then
-            # Can't identify specific problem package. The full output was
-            # already shown live via tee above, so only forward the actual
-            # apt error/warning lines to stderr (for check_errors_lax to
-            # pick up from $err_file) instead of re-dumping everything --
-            # doing the latter races with the YES_no prompt below because
-            # main_case's stderr is routed through a separate tee/sed pipe
-            # (see the fd-juggling in the run_stages loop) that can flush
-            # out of order with direct stdout, making the prompt look like
-            # it's being flooded before it can be answered.
-            echo "$install_output" | grep -E "^(E|W): " >&2
+            # Can't identify specific problem package, show error and exit
+            echo "$install_output" >&2
             error "Package installation failed and couldn't identify problematic package"
             return 1
         fi
@@ -4405,7 +3722,7 @@ $missing_packages"
         failed_packages="$failed_packages $problem_pkg"
 
         # Remove the problematic package from remaining list
-        remaining_packages=$(tr ' ' '\n' <<<"$remaining_packages" | grep -vxF -- "$problem_pkg" | tr '\n' ' ')
+        remaining_packages=$(echo "$remaining_packages" | sed "s/\b$problem_pkg\b//g" | sed 's/  */ /g' | sed 's/^ *//;s/ *$//')
 
         attempt=$((attempt + 1))
 
@@ -4450,7 +3767,7 @@ check_missing() {
 
     psay "$cnt" "Checking that $(pqn %n) $label package%s %were installed ..."
 
-    dpkg --get-selections | awk '$2 == "install" { print $1 }' > "$installed".list
+    dpkg --get-selections | grep "install\(ed\)\?$" | sed 's/\t.*//' > "$installed".list
     for pkg in $pkg_list; do
         [[ -r $known_missing ]] && grep -qxF "$pkg" "$known_missing" && continue
         grep -q "^$pkg\(:[A-Za-z0-9+-]\+\)\?$" "$installed".list || missing="$missing$pkg\n"
@@ -4460,8 +3777,7 @@ check_missing() {
         return
     fi
     dpkg --get-selections  >  "$installed".raw
-    printf '%b' "$missing" >> "$known_missing"
-    sort -u -o "$known_missing" "$known_missing"
+    echo -e "$missing"     >  /Build/missing-"$label".list
 
     local mcnt
     mcnt=$(echo -e "$missing" | wc -w)
@@ -4521,20 +3837,23 @@ collect_live_files() {
     local list_file=$1 dest_dir=$sqfs_dir$2
     [[ -r $list_file ]] || return
     echo "Collecting Live-files"
+    local list
+    list="$(grep -v "^\s*#\s*" "$list_file" | sed 's/\s*#.*//' \
+        | grep "^/" | sed "s=^=$sqfs_dir=")"
 
     $SUDO mkdir -p "$dest_dir"
     # This hard-codes the live-files dir but it is safer in case
     # $dest_dir is empty.
     $SUDO rm -rf "$(dirname "${dest_dir:?}")"/live-files/*
 
-    local file dest dest_file
-    grep -v "^\s*#\s*" "$list_file" | sed 's/\s*#.*//' | grep "^/" | while read -r file; do
-        file="$sqfs_dir$file"
+    local file dest
+    # shellcheck disable=SC2086
+    for file in $list; do
         [[ -e $file ]] || continue
         dest_file=${file#"$sqfs_dir"}
-        dest="$dest_dir$dest_file"
-        $SUDO mkdir -p "$(dirname "$dest")"
-        $SUDO cp -a "$file" "$dest"
+        dest=$dest_dir$dest_file
+        $SUDO mkdir -p "$(dirname $dest)"
+        $SUDO cp -a $file $dest
     done
 }
 
@@ -4550,13 +3869,13 @@ has_option() {
 
 make_uefi_iso() {
     local prog=$1 uefi=$2  file=$3 dir=$4
-    local -a cmd=("$prog" -l -V antiXlive -R -J -pad -no-emul-boot
+    local cmd="$prog -l -V antiXlive -R -J -pad -no-emul-boot
     -boot-load-size 4  -boot-info-table -b boot/isolinux/isolinux.bin
-    -eltorito-alt-boot "$uefi" boot/grub/efi.img -no-emul-boot
-    -quiet -c boot/isolinux/isolinux.cat -o "$file" "$dir")
+    -eltorito-alt-boot $uefi boot/grub/efi.img -no-emul-boot
+    -quiet -c boot/isolinux/isolinux.cat -o $file $dir"
 
-    echo "${cmd[*]}"
-    "${cmd[@]}" 2>&1 || error "iso file creation failed"
+    echo "$cmd"
+    $cmd 2>&1 || error "iso file creation failed"
     isohybrid --uefi "$file"
 }
 
@@ -4567,18 +3886,19 @@ make_xorriso_iso() {
     fi
     local prog=$1 file=$2 dir=$3
     local label="${ISO_LABEL:-$DISTRO_NAME-Live}"
-    local -a opts=("-hfsplus" "on" "-as" "mkisofs" "-quiet" "-l"
-                   "-R" "-J" "-iso-level" "3" "-pad" "-partition_cyl_align" "on"
-                   "-c" "boot/isolinux/isolinux.cat"
-                   "-b" "boot/isolinux/isolinux.bin"
-                   "-no-emul-boot" "-boot-load-size" "4" "-boot-info-table"
-                   "-eltorito-alt-boot" "-e" "boot/grub/efi.img" "-no-emul-boot"
-                   "-isohybrid-apm-hfsplus" "-isohybrid-gpt-basdat")
+    local opts_1="-hfsplus on -as mkisofs -quiet -l"
 
-    local -a cmd=("$prog" "${opts[@]}" -V "$label" -o "$file" "$dir")
-    echo "${cmd[*]}"
+    local opts_2="-R -J -iso-level 3 -pad -partition_cyl_align on"
+    opts_2="$opts_2 -c boot/isolinux/isolinux.cat"
+    opts_2="$opts_2 -b boot/isolinux/isolinux.bin"
+    opts_2="$opts_2 -no-emul-boot -boot-load-size 4 -boot-info-table"
+    opts_2="$opts_2 -eltorito-alt-boot -e boot/grub/efi.img -no-emul-boot"
+    opts_2="$opts_2 -isohybrid-apm-hfsplus -isohybrid-gpt-basdat"
 
-    "${cmd[@]}" 2>&1 || error "iso file creation failed"
+    cmd="$prog $opts_1 -V $label $opts_2 -o $file $dir"
+    echo "$cmd"
+
+    $cmd 2>&1 || error "iso file creation failed"
     isohybrid --uefi "$file"
 }
 
@@ -4590,17 +3910,18 @@ make_xorriso_iso_grub_only() {
     $SUDO sed -i '/^[^#]*switch_to_syslinux/s/^/#/' "$work_dir"/iso/boot/grub/config/bootmenu.cfg
     local prog=$1 file=$2 dir=$3
     local label="${ISO_LABEL:-$DISTRO_NAME-Live}"
-    local -a opts=("-hfsplus" "on" "-as" "mkisofs" "-quiet" "-l"
-                   "-R" "-J" "-iso-level" "3" "-pad" "-partition_cyl_align" "on"
-                   "-b" "boot/grub/i386-pc/eltorito.img"
-                   "-no-emul-boot" "-boot-load-size" "4" "-boot-info-table" "--grub2-boot-info"
-                   "-eltorito-alt-boot" "-e" "boot/grub/efi.img" "-no-emul-boot"
-                   "-isohybrid-apm-hfsplus" "-isohybrid-gpt-basdat")
+    local opts_1="-hfsplus on -as mkisofs -quiet -l"
 
-    local -a cmd=("$prog" "${opts[@]}" -V "$label" -o "$file" "$dir")
-    echo "${cmd[*]}"
+    local opts_2="-R -J -iso-level 3 -pad -partition_cyl_align on"
+    opts_2="$opts_2 -b boot/grub/i386-pc/eltorito.img"
+    opts_2="$opts_2 -no-emul-boot -boot-load-size 4 -boot-info-table --grub2-boot-info"
+    opts_2="$opts_2 -eltorito-alt-boot -e boot/grub/efi.img -no-emul-boot"
+    opts_2="$opts_2 -isohybrid-apm-hfsplus -isohybrid-gpt-basdat"
 
-    "${cmd[@]}" 2>&1 || error "iso file creation failed"
+    cmd="$prog $opts_1 -V $label $opts_2 -o $file $dir"
+    echo "$cmd"
+
+    $cmd 2>&1 || error "iso file creation failed"
     #isohybrid not needed for grub2 legacy boot
     #isohybrid --uefi "$file"
 }
@@ -4777,23 +4098,22 @@ utf8_to_ascii() {
 }
 
 busybox_depmod() {
-    local targ=$1  kernel=$2  depmod_cmd=${3:-depmod}
+    local targ=$1  kernel=$2  cmd=${3:-depmod}
 
     local mod_dir=$targ/lib/modules
     local k_dir=$mod_dir/$kernel
     local to_delete
 
-    [[ -d $targ ]]                  || fatal "Target $targ is not a directory"
-    [[ -x $targ/bin/busybox ]]      || fatal "Could not find /bin/busybox"
-    [[ -x $targ/bin/$depmod_cmd ]]  || fatal "Could not find /bin/$depmod_cmd"
+    [[ -d $targ ]]             || fatal "Target $targ is not a directory"
+    [[ -x $targ/bin/busybox ]] || fatal "Could not find /bin/busybox"
+    [[ -x $targ/bin/$cmd ]]    || fatal "Could not find /bin/$cmd"
     [[ -d $mod_dir ]]          || fatal "Could not find /lib/modules"
     [[ -d $k_dir ]]            || fatal "Could not find $k_dir"
 
-    local -a to_delete=()
     local proc_dir=$targ/proc
     if ! [[ -e $proc_dir ]]; then
         mkdir "$proc_dir"
-        to_delete+=("$proc_dir")
+        to_delete="$proc_dir $to_delete"
     fi
 
     touch "$proc_dir"/modules
@@ -4801,11 +4121,11 @@ busybox_depmod() {
     fake_dir=$mod_dir/$(uname -r)
     if [[ $fake_dir != "$k_dir" ]]; then
         ln -s "$kernel" "$fake_dir" || error "Error creating $fake_dir symlink"
-        to_delete+=("$fake_dir")
+        to_delete="$fake_dir $to_delete"
     fi
 
     $SUDO chroot "$targ" /bin/depmod
-    for file in "${to_delete[@]}"; do
+    for file in $to_delete; do
         echo "delete $file"
         rm -r "$file"
     done
@@ -4855,17 +4175,6 @@ mount_pacman_cache() {
 }
 
 #------------------------------------------------------------------------------
-# mount_dnf_cache
-# Bind mount the DNF package cache directory for reuse across chroot runs.
-#------------------------------------------------------------------------------
-mount_dnf_cache() {
-    local libdnf5_dir=$sqfs_dir/var/cache/libdnf5
-    mkdir -p "$dnf_cache_dir"
-    $SUDO find "$dnf_cache_dir" -maxdepth 1 -type f \( -name '*.part' -o -name '*.lck' \) -delete 2>/dev/null || true
-    bind_mount "$dnf_cache_dir" "$libdnf5_dir"
-}
-
-#------------------------------------------------------------------------------
 # bind_mount old_mp new_mp
 # Common code for bind outside mounting directories in the chroot.
 #------------------------------------------------------------------------------
@@ -4873,7 +4182,8 @@ bind_mount() {
     local old=$1 new=$2
     mountpoint -q "$new" && return
     $SUDO mkdir -p "$new"
-    $SUDO mount --bind "$old" "$new" || my_exit
+    $SUDO mount --bind "$old" "$new"  || my_exit
+    UMOUNTS="$new $UMOUNTS"
 }
 
 #------------------------------------------------------------------------------
@@ -4887,7 +4197,6 @@ prep_chroot() {
     umount_chroot
     [[ ${DISTRO_FAMILY:-debian} = debian ]] && mount_deb_cache
     [[ ${DISTRO_FAMILY:-debian} = arch ]] && mount_pacman_cache
-    [[ ${DISTRO_FAMILY:-debian} = fedora ]] && mount_dnf_cache
 
     for fs in proc sys; do
         say "Mounting $(pq /$fs) in chroot"
@@ -4922,11 +4231,6 @@ prep_chroot() {
         $SUDO rm -f "$sqfs_dir/etc/resolv.conf"
         $SUDO cp -L /etc/resolv.conf "$sqfs_dir/etc/resolv.conf"
         $SUDO chmod 644 "$sqfs_dir/etc/resolv.conf" 2>/dev/null || true
-    elif [[ ${DISTRO_FAMILY:-debian} = fedora ]]; then
-        $SUDO mkdir -p "$sqfs_dir/etc"
-        $SUDO rm -f "$sqfs_dir/etc/resolv.conf"
-        $SUDO cp -L /etc/resolv.conf "$sqfs_dir/etc/resolv.conf"
-        $SUDO chmod 644 "$sqfs_dir/etc/resolv.conf" 2>/dev/null || true
     elif ! is_antiX; then
         $SUDO rm -f "$sqfs_dir/etc/resolv.conf"
         $SUDO cp -L /etc/resolv.conf "$sqfs_dir/etc/resolv.conf"
@@ -4934,16 +4238,6 @@ prep_chroot() {
 
     # Always use local mirror when working in chroot
     [[ ${DISTRO_FAMILY:-debian} = debian ]] && set_chroot_mirror "$LOCAL_MIRROR" "LOCAL mirror"
-
-    # Block service actions during package installs. dpkg resets PATH for
-    # maintainer scripts, so the /Build/fake shadowing of invoke-rc.d doesn't
-    # apply there; invoke-rc.d checks this file directly regardless of PATH.
-    # Without it, postinst/trigger scripts can try to actually reload/restart
-    # a service that isn't running in the chroot (e.g. cups) and hang.
-    say "Install $(pq policy-rc.d) to block chroot service actions"
-    $SUDO mkdir -p "$sqfs_dir/usr/sbin"
-    printf '#!/bin/sh\nexit 101\n' | $SUDO tee "$sqfs_dir/usr/sbin/policy-rc.d" >/dev/null
-    $SUDO chmod 755 "$sqfs_dir/usr/sbin/policy-rc.d"
 
     # TERM helps nano to work in chroot, LC_ALL is for Deb
     export TERM=xterm LC_ALL=C
@@ -4971,35 +4265,21 @@ make_build_dir() {
     mkdir "$b_dir"
 
     mkdir -p "$b_dir"/Deb
-    local -a deb_files=()
-    mapfile -t deb_files < <(gather_deb)
-    if (( ${#deb_files[@]} > 0 )); then
-        cp --target-directory="$b_dir"/Deb "${deb_files[@]}"
-    fi
+    local deb_files
+    deb_files=$(gather_deb)
+    # shellcheck disable=SC2086
+    [[ -n $deb_files ]] && cp --target-directory="$b_dir"/Deb $deb_files
 
     # Copy Arch packages if building for Arch
     if [[ $DISTRO_FAMILY = arch ]]; then
-        local -a arch_pkgs=()
-        mapfile -t arch_pkgs < <(gather_arch_pkg)
-        if (( ${#arch_pkgs[@]} > 0 )); then
-            cp --target-directory="$b_dir"/Deb "${arch_pkgs[@]}"
-        fi
+        local arch_pkgs
+        arch_pkgs=$(gather_arch_pkg)
+        # shellcheck disable=SC2086
+        [[ -n $arch_pkgs ]] && cp --target-directory="$b_dir"/Deb $arch_pkgs
     fi
 
-    # Copy RPM packages if building for Fedora
-    if [[ $DISTRO_FAMILY = fedora ]]; then
-        local -a rpm_pkgs=()
-        while IFS= read -r -d '' f; do
-            rpm_pkgs+=("$f")
-        done < <(find "$script_dir/Deb/Fedora"* -maxdepth 0 -type d 2>/dev/null | while IFS= read -r dir; do
-            find "$dir" -maxdepth 1 -name '*.rpm' -print0 2>/dev/null
-        done)
-        if (( ${#rpm_pkgs[@]} > 0 )); then
-            cp --target-directory="$b_dir"/Deb "${rpm_pkgs[@]}"
-        fi
-    fi
-
-    cp -r "$0" Input "$tools" "${regex_files[@]}" "$b_dir"
+    # shellcheck disable=SC2086
+    cp -r "$0" Input "$tools" $regex_files "$b_dir"
 
     #make custom user-defaults file defaults in chroot, if it exists and switch was used
     if [[ -n $user_defaults ]]; then
@@ -5022,9 +4302,6 @@ make_build_dir() {
     if [[ ${DISTRO_FAMILY:-debian} = arch ]]; then
         template_tree="Template/Arch"
         [[ -d "$script_dir/$template_tree" ]] || fatal "Missing Arch templates at $(pq "$template_tree")"
-    elif [[ ${DISTRO_FAMILY:-debian} = fedora ]]; then
-        template_tree="Template/Fedora"
-        [[ -d "$script_dir/$template_tree" ]] || fatal "Missing Fedora templates at $(pq "$template_tree")"
     fi
     (cd "$script_dir" && tar cf -          \
         --exclude iso                    \
@@ -5177,8 +4454,8 @@ check_sqfs_dir() {
 # the string.
 #------------------------------------------------------------------------------
 has_word() {
-    local name=$1 part=$2 val
-    val="${!name}"
+    local name=$1 part=$2
+    eval val=\$"$name"
     case ,$val, in
             *,$part,*) return 0 ;;
         *,a,*|*,all,*) return 0 ;;
@@ -5223,7 +4500,7 @@ short_dir() {
 #==============================================================================
 start_timer() {
     local name=${1:-START_T}
-    printf -v "$name" '%s' "$EPOCHSECONDS"
+    eval "$name"=\"$EPOCHSECONDS\"
 }
 
 end_timer() {
@@ -5233,7 +4510,7 @@ end_timer() {
 _end_timer_() {
     local name=$1 title
     title=$(cprint_left 36 "$2")
-    local start_t="${!name}"
+    eval local start_t=\$"$name"
     echo  # Ensure we start on a fresh line
     # shellcheck disable=SC2154
     _say_ "${time_co}time for $text_co$title$nc $(pqn "$(elapsed "$start_t")")$nc"
@@ -5289,7 +4566,7 @@ _cache_() {
     local ctype=$1; shift
     local type=$1 subtype=$2 dir=$3
 
-    local cache_exclude="^\./Build|^\./proc/|^\./sys/|^\./var/cache/apt/archives/|^\./var/cache/pacman/pkg/|^\./var/cache/libdnf5/"
+    local cache_exclude="^/Build|^/proc/|^/sys/|^/var/cache/apt/archives/|^/var/cache/pacman/pkg/"
 
     echo "$dir" | grep -q "^$remaster_dir" || fatal "Refusing to cache suspicious directory: $dir"
 
@@ -5535,10 +4812,10 @@ Parts_Blurb
 expand_parts() {
     local val var
     for var; do
-        val="${!var:-}"
+        eval "val=\${$var:-}"
         [[ $val =~ - ]] || continue
         val=$(expand_range "$val")
-        printf -v "$var" '%s' "$val"
+        eval "$var=\$val"
     done
 }
 
@@ -5574,7 +4851,7 @@ choose() {
     local value title=$1 var=$2;
     shift 2;
 
-    value="${!var}"
+    eval value=\$"$var"
     [[ -n $value && -z $reset_mode ]] && return
 
     local prompt="${err_co}Enter a number$prompt_co>$nc "
@@ -5586,7 +4863,7 @@ choose() {
     # Strip first " (" and all that follows it (for ENABLE_LOCALES)
     # Quite a kludge but it seems to work okay.
     value=${value%% (*}
-    printf -v "$var" '%s' "$value"
+    eval "$var"=\$value
 
     update_default_file "$var" "$value"
 }
@@ -5625,7 +4902,7 @@ my_select() {
             continue
         fi
 
-        printf -v "$var" '%s' "$val"
+        eval "$var"=\""$val"\"
         break
     done
 }
@@ -5635,7 +4912,7 @@ my_select() {
 #------------------------------------------------------------------------------
 update_default() {
     local value var=$1
-    value="${!var}"
+    eval value=\$"$var"
     local orig_val=$value
     [[ -n $value && -z $reset_mode ]] && return
     echo -e "\n${text_co}Update default $(pq "$var"): $orig_val$nc"
@@ -5696,10 +4973,10 @@ load_defaults() {
 pick_prog() {
     local prog found var=$1
     shift
-    printf -v "$var" '%s' ""
+    eval "$var"=
     for prog; do
         which "$prog" &>/dev/null || continue
-        printf -v "$var" '%s' "$prog"
+        eval "$var"=\$prog
         found=true
         break
     done
@@ -5739,8 +5016,7 @@ check_theme_dir() {
 # Return failure only if user says no to clearing files.
 #------------------------------------------------------------------------------
 clear_outputs() {
-    local names stop=${1:-0} pretend=$2 delete=$3
-    local -a files=()
+    local names files stop=${1:-0} pretend=$2 delete=$3
     # shellcheck disable=SC2086
     for i in $(reverse $all_stages); do
         (( i < stop )) && break
@@ -5748,20 +5024,21 @@ clear_outputs() {
         local file=$output_dir/$name
         [[ -f $file ]] || continue
         names="$names$name\n"
-        files+=("$file")
+        files="$files $file"
     done
     local col_names
     col_names=$(echo -e "$names" | sort | expand \
         | sed -e "s/^/$high_co/" -e "s/$/$nc/")
 
-    (( ${#files[@]} > 0 )) || return 0
+    [[ -n $files ]] || return 0
 
     if [[ -n $pretend ]]; then
         echo -e "$ME would clear:\n$col_names\n"
         return 0
 
     elif [[ -n $delete ]]; then
-        rm -f "${files[@]}"
+        # shellcheck disable=SC2086
+        rm -f $files
         return 0
 
     else
@@ -5772,9 +5049,11 @@ clear_outputs() {
         if [[ -n $work_dir && -d $work_dir ]]; then
             local save_out=$work_dir/Output
             mkdir -p "$save_out"
-            mv -f "${files[@]}" "$save_out"/
+            # shellcheck disable=SC2086
+            mv -f $files "$save_out"/
         else
-            rm -f "${files[@]}"
+            # shellcheck disable=SC2086
+            rm -f $files
         fi
     fi
     return 0
@@ -5789,9 +5068,13 @@ my_exit() {
 #------------------------------------------------------------------------------
 # do_pretend
 # Report what the next stage to work on would be. Also display the name of
-# the stage and the global variables (if appropriate).
+# the stage and the global variables (if appropriate). BUG: there are cases
+# where the globals aren't 100% accurate if redo_mode or start_from are used.
 #------------------------------------------------------------------------------
 do_pretend() {
+    #[[ -n $redo_mode && $stage -gt 0 ]] && stage=$((stage - 1))
+    #[[ -n $start_from && $stage -gt $start_from ]] && stage=$start_from
+
     echo "$ME would next do stage: $bold_co$stage$nc"
 
     local stage_info
@@ -5824,7 +5107,7 @@ do_stats() {
     done
 
     local regex="core|base|full"
-    ! is_antiX && regex="$regex|mx32|mx64|mxahs|mxkde"
+    ! is_antiX && regex="$regex|mx32|mx64|mxahs|mxkd"
     for FLAV in $(flavour_list | grep -Ev "^($regex)$"); do
         for ISO_RESPIN_OF in core full; do
             yell "\n$FLAV/$ISO_RESPIN_OF$high_co:"
@@ -5868,18 +5151,18 @@ global_names() {
     prev=$((stage - 1))
 
     # Gather input files
-    local input_files=$normal_defaults
-    [[ -n $verbose_mode ]] && input_files=$all_defaults
+    local files=$normal_defaults
+    [[ -n $verbose_mode ]] && files=$all_defaults
 
     # Gather output files
     local s file
     for s in $(seq 0 $prev); do
         file=$output_dir/stage-$s.out
-        [[ -e $file ]] && input_files="$input_files $file"
+        [[ -e $file ]] && files="$files $file"
     done
 
     # shellcheck disable=SC2086
-    sed -n -r "s/^\\s*([a-zA-Z_]+)=.*/\\1/p" $input_files 2>/dev/null | sort -u
+    sed -n -r "s/^\s*([a-zA-Z_]+)=.*/\1/p" $files 2>/dev/null | sort -u
 }
 
 #------------------------------------------------------------------------------
@@ -5890,7 +5173,7 @@ global_names() {
 pretty_output() {
     local name value
     for name in $(global_names "$@"); do
-        value="${!name}"
+        eval value=\"\$"$name"\"
         # shellcheck disable=SC2059
         printf "$pretty_fmt" "$name" "$value"
     done
@@ -5905,19 +5188,7 @@ pretty_output() {
 # window title if it was set.
 #------------------------------------------------------------------------------
 on_exit() {
-    if [[ -z $UMOUNT_ERRORS ]]; then
-        umount_chroot
-    else
-        # umount_chroot already ran and hit errors; best-effort lazy sweep
-        # to avoid leaving stale mounts behind
-        for mp in $(mount | cut -d" " -f3 | grep "^$remaster_dir/work/.*/squashfs/"); do
-            [[ $mp == "$sqfs_dir" ]] && continue
-            $SUDO umount -l "$mp" 2>/dev/null || true
-        done
-    fi
-
-    [[ -n $ORIG_TCP_SYN_RETRIES ]] \
-        && $SUDO sysctl -q -w net.ipv4.tcp_syn_retries="$ORIG_TCP_SYN_RETRIES" 2>/dev/null
+    [[ -z $UMOUNT_ERRORS ]] && umount_chroot
 
     [[ -n $exit_file ]] && rm -f "$exit_file"
 
@@ -5943,7 +5214,7 @@ on_exit() {
 #------------------------------------------------------------------------------
 clear_pids() {
     for name in TAIL_PID_1 TAIL_PID_2; do
-        local pid="${!name}"
+        eval local pid=\$$name
         unset   $name
         [[ -z $pid ]] && continue
         disown  "$pid" 2>/dev/null
@@ -6005,7 +5276,7 @@ require_arch_host_tools() {
         if [[ $missing =~ (^|[[:space:]])xorriso($|[[:space:]]) ]]; then
             hint="${hint:+$hint; }sudo pacman -S libisoburn"
         fi
-        if [[ $missing =~ (^|[[:space:]])(mformat|mcopy)($|[[:space:]]) ]]; then
+        if [[ $missing =~ (^|[[:space:]]])(mformat|mcopy)($|[[:space:]]) ]]; then
             hint="${hint:+$hint; }sudo pacman -S mtools"
         fi
 
@@ -6029,53 +5300,8 @@ require_arch_host_tools() {
         if [[ $missing =~ (^|[[:space:]])xorriso($|[[:space:]]) ]]; then
             hint="${hint:+$hint; }For xorriso try: sudo apt install xorriso"
         fi
-        if [[ $missing =~ (^|[[:space:]])(mformat|mcopy)($|[[:space:]]) ]]; then
+        if [[ $missing =~ (^|[[:space:]]])(mformat|mcopy)($|[[:space:]]) ]]; then
             hint="${hint:+$hint; }For mformat/mcopy try: sudo apt install mtools"
-        fi
-    fi
-    fatal "Missing these required programs: $(pqw "$missing").${hint:+ $hint}"
-}
-
-#------------------------------------------------------------------------------
-# require_fedora_host_tools
-# Check for required tools on the host for Fedora builds.
-#------------------------------------------------------------------------------
-require_fedora_host_tools() {
-    local missing
-    missing=$(missing_programs dnf grub-mkrescue xorriso mformat mcopy rpm)
-    [[ -z $missing ]] && return 0
-
-    local hint=""
-    if which dnf >/dev/null 2>&1; then
-        # On Fedora host
-        if [[ $missing =~ (^|[[:space:]])grub-mkrescue($|[[:space:]]) ]]; then
-            hint=" On Fedora try: sudo dnf install grub2-tools-extra"
-        fi
-        if [[ $missing =~ (^|[[:space:]])xorriso($|[[:space:]]) ]]; then
-            hint="${hint:+$hint; }sudo dnf install xorriso"
-        fi
-        if [[ $missing =~ (^|[[:space:]])(mformat|mcopy)($|[[:space:]]) ]]; then
-            hint="${hint:+$hint; }sudo dnf install mtools"
-        fi
-        if [[ $missing =~ (^|[[:space:]])rpm($|[[:space:]]) ]]; then
-            hint="${hint:+$hint; }sudo dnf install rpm"
-        fi
-    elif which apt-get >/dev/null 2>&1; then
-        # On Debian/MX hosts
-        if [[ $missing =~ (^|[[:space:]])dnf($|[[:space:]]) ]]; then
-            hint=" For dnf try: sudo apt install dnf"
-        fi
-        if [[ $missing =~ (^|[[:space:]])grub-mkrescue($|[[:space:]]) ]]; then
-            hint="${hint:+$hint; }For grub-mkrescue try: sudo apt install grub2-common (or grub-common on older versions)"
-        fi
-        if [[ $missing =~ (^|[[:space:]])xorriso($|[[:space:]]) ]]; then
-            hint="${hint:+$hint; }For xorriso try: sudo apt install xorriso"
-        fi
-        if [[ $missing =~ (^|[[:space:]])(mformat|mcopy)($|[[:space:]]) ]]; then
-            hint="${hint:+$hint; }For mformat/mcopy try: sudo apt install mtools"
-        fi
-        if [[ $missing =~ (^|[[:space:]])rpm($|[[:space:]]) ]]; then
-            hint="${hint:+$hint; }For rpm try: sudo apt install rpm"
         fi
     fi
     fatal "Missing these required programs: $(pqw "$missing").${hint:+ $hint}"
@@ -6097,59 +5323,6 @@ ensure_archlinux_keyring_layout() {
         fi
     done
     [[ -r "$arch_keyrings/archlinux.gpg" ]]
-}
-
-# Run pacstrap on a non-Arch host.  A Debian/MX archlinux-keyring snapshot can
-# lag behind Arch package-signing key renewals.  Avoid a network refresh on
-# every build: only refresh the signer(s) named by an unknown-trust failure,
-# then retry pacstrap once.
-pacstrap_with_keyring_retry() {
-    local pacman_conf=$1 target=$2
-    shift 2
-
-    local output ret refresh_ret=0 signer
-    local -a signers=()
-    output=$(mktemp --tmpdir "$ME-pacstrap.XXXXXX") || return 1
-
-    $SUDO env LC_ALL=C pacstrap -C "$pacman_conf" -c -G -M "$target" "$@" 2>&1 | tr '\r' '\n' | tee "$output"
-    ret=${PIPESTATUS[0]}
-    if (( ret == 0 )); then
-        rm -f "$output"
-        return 0
-    fi
-
-    mapfile -t signers < <(sed -n -E \
-        's/.*signature from "([^"]+)" is unknown trust.*/\1/p' "$output" | sort -u)
-    if (( ${#signers[@]} == 0 )); then
-        rm -f "$output"
-        return "$ret"
-    fi
-
-    say "Refresh Arch signing keys after an unknown-trust failure"
-    for signer in "${signers[@]}"; do
-        say "Refresh signing key for $(pq "$signer")"
-        $SUDO pacman-key --refresh-keys "$signer" 2>&1 | tr '\r' '\n'
-        (( PIPESTATUS[0] == 0 )) || refresh_ret=1
-    done
-
-    if (( refresh_ret != 0 )); then
-        warn "Could not refresh all unknown Arch signing keys"
-        rm -f "$output"
-        return "$ret"
-    fi
-
-    $SUDO pacman-key --populate archlinux 2>&1 | tr '\r' '\n'
-    if (( PIPESTATUS[0] != 0 )); then
-        warn "Could not repopulate the Arch signing keyring"
-        rm -f "$output"
-        return "$ret"
-    fi
-
-    say "Retry pacstrap with the refreshed keyring"
-    $SUDO env LC_ALL=C pacstrap -C "$pacman_conf" -c -G -M "$target" "$@" 2>&1 | tr '\r' '\n'
-    ret=${PIPESTATUS[0]}
-    rm -f "$output"
-    return "$ret"
 }
 
 #==============================================================================
@@ -6221,7 +5394,7 @@ compile_pkg_list() {
     pkg_list=$(gather "$1")
     exclude_list=$(gather "$2")
     for i in $pkg_list ; do
-        grep -Fxq -- "$i" <<<"$exclude_list" || result="$result $i"
+        [[ ! $exclude_list =~ .*$i.* ]] && result="$result $i"
     done
     echo "$result"
 }
@@ -6243,7 +5416,7 @@ get_template_file() {
     for flav in $FLAV $RESPIN_INHERIT COMMON; do
         full=$template/$flav/$file
         [[ -r $full ]] || continue
-        printf -v "$var" '%s' "$full"
+        eval "$var"=\$full
         return 0
     done
 
@@ -6278,6 +5451,8 @@ copy_template_dir() {
             say "Only overwrite from Template: $(pq "$flav"/"$from")"
             only_overwrite "$dir" "$dest"
         else
+        	#ensure template files are read-only on group permission
+        	chmod -R g-w "$dir"/
             say "Copy from Template: $(pq "$flav"/"$from")"
             $sudo cp -R --preserve=link,mode "$dir"/* "$dest"/
         fi
@@ -6307,7 +5482,7 @@ update_add_remove_lists() {
             file=$dir/$fname
             [[ -e $file ]] || continue
             pkgs=$(grep -v -e "^\s*#" -e "^\s*$" "$file" | sed 's/\s*#.*//')
-            [[ -n $pkgs ]] || continue
+            [[ -n $pkgs ]] || next
             cnt=$(echo "$pkgs" | wc -l)
             say "Found $(pqn "$cnt") packages in $flav/$fname"
             say_in "$high_co" "$pkgs"
@@ -6339,7 +5514,7 @@ update_remove_list() {
 
     local p tdir tfile tflav short preg regex
     for tdir in $targ_dirs; do
-        for tname in package basic-package pesky-package; do
+        for tname in package basic-package pesky-packages; do
             tfile=$tdir/$tname.list
             tflav=$(basename "$tdir")
             short=$tflav/$tname.list
@@ -6432,14 +5607,8 @@ is_distro_flav() {
         esac
         return 1
     fi
-
-    # For other distributions, validate against the list of available templates
-    local f
-    while read -r f; do
-        [[ "$f" = "$flav" ]] && return 0
-    done < <(flavour_list)
-
-    return 1
+    #
+    return 0
 }
 
 #==============================================================================
@@ -6471,31 +5640,30 @@ update_template_file() {
 }
 
 update_list_names() {
-    local -a list=()
-    mapfile -d '' list < <(find Template -name "*-list" -print0)
-    (( ${#list[@]} > 0 )) || return
+    local list
+    list=$(find Template -name "*-list")
+    [[ -n $list ]] || return;
     echo "Rename *-list file names to *.list"
 
     YES_no_loud "Rename these files?" || vexit "Must update to continue"
 
-    for old in "${list[@]}"; do
+    for old in $list; do
         new=${old/-list/.list}
         [[ -n $new ]] || continue
-        echo "Renaming $old to $new"
+        echo "Renaming $old"
         mv "$old" "$new"
     done
 }
 
 update_lsb_release() {
-    local lsb_version
-    lsb_version="$(echo "$DISTRO_VERSION" | sed -r 's/^([0-9._-]+).*/\1/' | cut -d_ -f1)"
+    local lsb_version="$(echo "$DISTRO_VERSION" | sed -r 's/^([0-9._-]+).*/\1/' | cut -d_ -f1)"
     local name="$DISTRO_NAME"
 
-    echo "PRETTY_NAME=\"$name $lsb_version $CODE_NAME\"" |$SUDO tee "$sqfs_dir"/etc/lsb-release
-    echo "DISTRIB_ID=$name" |$SUDO tee -a "$sqfs_dir"/etc/lsb-release
-    echo "DISTRIB_RELEASE=$lsb_version" |$SUDO tee -a "$sqfs_dir"/etc/lsb-release
-    echo "DISTRIB_CODENAME=$CODE_NAME" |$SUDO tee -a "$sqfs_dir"/etc/lsb-release
-    echo "DISTRIB_DESCRIPTION=\"$name $lsb_version $CODE_NAME\"" |$SUDO tee -a "$sqfs_dir"/etc/lsb-release
+    echo "PRETTY_NAME=\"$name $lsb_version $CODE_NAME\"" |$SUDO tee $sqfs_dir/etc/lsb-release
+    echo "DISTRIB_ID=$name" |$SUDO tee -a $sqfs_dir/etc/lsb-release
+    echo "DISTRIB_RELEASE=$lsb_version" |$SUDO tee -a $sqfs_dir/etc/lsb-release
+    echo "DISTRIB_CODENAME=$CODE_NAME" |$SUDO tee -a $sqfs_dir/etc/lsb-release
+    echo "DISTRIB_DESCRIPTION=\"$name $lsb_version $CODE_NAME\"" |$SUDO tee -a $sqfs_dir/etc/lsb-release
 
 }
 

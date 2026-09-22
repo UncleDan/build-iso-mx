@@ -1,0 +1,4 @@
+#!/bin/sh
+# Run the given command only in an X11 session.
+[ -n "$WAYLAND_DISPLAY" ] && exit 0
+exec "$@"

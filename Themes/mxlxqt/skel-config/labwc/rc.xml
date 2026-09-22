@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<labwc_config>
+  <theme>
+    <name>THEME</name>
+    <cornerRadius>4</cornerRadius>
+  </theme>
+  <keyboard>
+    <!-- <default/> keeps labwc's built-in keybindings alongside this one. -->
+    <default />
+    <keybind key="W-l">
+      <action name="Execute" command="swaylock -f -c 1c1c1c" />
+    </keybind>
+  </keyboard>
+</labwc_config>

@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Network (GTK applet, disabled)
+Exec=nm-applet
+Terminal=false
+Hidden=true
