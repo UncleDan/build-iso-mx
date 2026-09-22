@@ -1,0 +1,24 @@
+# Defaults for the mxniri-sysv flavour: MX 25.2 AHS (sysvinit) with the niri
+# Wayland compositor instead of the Xfce desktop.
+#
+# Build with:  sudo ./build-iso --user-default defaults-Niri-ahs-sysv
+#
+# niri and xwayland-satellite come from Deb/mxniri-sysv/ and are built with
+# Tools/build-niri-debs.sh before the first build.
+
+DEFAULTDESKTOP="Niri_ahs_sysvinit"
+DISTRO_VERSION="${RELEASEVERSION}_$DEFAULTDESKTOP$ALPHABETARCVERSION"
+
+# AHS kernel, same as the Xfce AHS edition
+K_REVISION="*-liquorix"
+K_TEMPLATE="%V%G-%R-%A"
+K_VERSION="6.*.*"
+
+ENABLE_LOCALES=Default
+
+THEME=mxniri
+ISO_FLAV=mxniri-sysv
+ARCH=amd64
+
+# DE particular items
+X_TERM_EMULATOR="/usr/bin/xfce4-terminal.wrapper"

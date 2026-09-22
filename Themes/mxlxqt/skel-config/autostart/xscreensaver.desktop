@@ -1,6 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=XScreenSaver (X11 screen lock)
-Exec=run-if-x11 xscreensaver -no-splash
-Terminal=false
-X-GNOME-Autostart-enabled=true

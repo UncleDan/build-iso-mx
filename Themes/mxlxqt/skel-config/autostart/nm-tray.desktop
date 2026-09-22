@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Network Manager Tray
-Exec=nm-tray
-Icon=network-workgroup
-Terminal=false
-NoDisplay=false
-X-GNOME-Autostart-enabled=true

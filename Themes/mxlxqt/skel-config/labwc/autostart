@@ -1,4 +1,0 @@
-#!/bin/sh
-# Starting point of the LXQt Wayland session: lxqt-session runs the desktop,
-# and labwc exits as soon as the session ends.
-lxqt-session && labwc --exit

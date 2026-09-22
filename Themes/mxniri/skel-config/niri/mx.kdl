@@ -1,0 +1,30 @@
+// MX Linux additions to the niri configuration.
+// Included at the end of config.kdl, so what is set here wins.
+// Reference: https://niri-wm.github.io/niri/Configuration:-Introduction
+
+binds {
+    Mod+E hotkey-overlay-title="Open the File Manager: Thunar" { spawn "thunar"; }
+    Mod+Shift+D hotkey-overlay-title="MX Tools" { spawn "mx-tools"; }
+    Mod+Shift+T hotkey-overlay-title="Task Manager" { spawn "xfce4-taskmanager"; }
+    // Mod+Shift+E quits niri; with LightDM autologin (live session) that logs
+    // straight back in. This goes to the login screen to change user instead.
+    Mod+Alt+E hotkey-overlay-title="Switch User (login screen)" { spawn "dm-tool" "switch-to-greeter"; }
+}
+
+window-rule {
+    // MX Tools and similar small utilities are more usable floating.
+    match app-id="^mx-"
+    open-floating true
+}
+
+// Conky is installed but not started: it is an X11 program, so under niri it
+// runs as a normal window through xwayland-satellite, not on the desktop
+// background. Uncomment to start it anyway:
+// spawn-sh-at-startup "sh /usr/share/mx-conky-data/conky-startup.sh"
+
+// Mod is the Super (Windows) key. In a virtual machine the host often keeps
+// that key for itself, so none of the Mod shortcuts reach niri: enable the
+// host's keyboard capture, or use Alt as Mod by uncommenting this block.
+// input {
+//     mod-key "Alt"
+// }

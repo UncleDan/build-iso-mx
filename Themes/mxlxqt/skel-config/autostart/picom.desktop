@@ -1,6 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Picom (X11 compositor)
-Exec=run-if-x11 picom
-Terminal=false
-X-GNOME-Autostart-enabled=true
