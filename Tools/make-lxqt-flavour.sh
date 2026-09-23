@@ -1,5 +1,5 @@
 #!/bin/bash
-# make-lxqt-flavour.sh by Daniele Lolli (UncleDan) feat. Claude AI - Release v19 - 2026-09-22 11-20-54
+# make-lxqt-flavour.sh by Daniele Lolli (UncleDan) feat. Claude AI - Release v20 - 2026-09-23 15-05-49
 # Creates the LXQt flavour (Input/defaults-lxqt*, Template/mxlxqt*, Themes/mxlxqt)
 # by duplicating the KDE one and applying the agreed changes.
 set -euo pipefail
@@ -240,11 +240,12 @@ for pair in "mxkde:mxlxqt" "mxkde-sysv:mxlxqt-sysv"; do
     rm -rf "$dst"; cp -a "$src" "$dst"
     make_pkg_list "$src/package.list" "$dst/package.list"
     echo "LXQt" > "$dst/default-desktop"
-    # pesky-package.list is a list of packages INSTALLED LATE (part 7), not a
-    # blocklist. desktop-defaults-mx-kde would therefore install MX's KDE
-    # defaults - and pull Plasma in with them, which is what put plasma.desktop
-    # back into the SDDM session list. There is no LXQt counterpart: drop it.
-    sed -i '/^desktop-defaults-mx-kde$/d' "$dst/pesky-package.list"
+    # pesky-package.list installs LATE (part 7), it does not block. Keep
+    # desktop-defaults-mx-kde: despite the name it is a config-only package,
+    # and it is what ships the SDDM themes - "monochrome" included, the one
+    # sddm.conf selects. Without it the login screen falls back to SDDM's bare
+    # default. It does not pull the Plasma shell in; the Plasma session files
+    # are handled by delete-files.list below.
     # Belt and braces: if anything ever pulls Plasma back in as a dependency,
     # its session entries must not reach the ISO - they would show up in SDDM
     # and hang the machine when selected.
@@ -352,7 +353,7 @@ cat > Themes/mxlxqt/skel-config/lxqt/lxqt.conf <<'EOF'
 [General]
 __userfile__=true
 # KDE's own Breeze stack: LXQt is Qt, so the Plasma theming keeps working.
-icon_theme=Papirus-mxblue
+icon_theme=Papirus-mxbluedark
 theme=kde-plasma
 single_click_activate=false
 
@@ -435,7 +436,7 @@ cat > Themes/mxlxqt/skel-config/kdeglobals <<'EOF'
 ColorScheme=BreezeDark
 
 [Icons]
-Theme=Papirus-mxblue
+Theme=Papirus-mxbluedark
 
 [KDE]
 widgetStyle=Breeze
@@ -624,7 +625,7 @@ echo "theme.sh: Qt widget style set to $style"
 
 # Icon theme: KDE first, MX Papirus as fallback. Written to both the LXQt
 # config and kdeglobals so KF6 applications agree with the panel.
-for i in Papirus-mxblue Papirus-Dark Papirus breeze-dark breeze; do
+for i in Papirus-mxbluedark Papirus-Dark Papirus-mxblue Papirus breeze-dark; do
     if [ -d "$ROOT/usr/share/icons/$i" ]; then
         sed -i "s/^icon_theme=.*/icon_theme=$i/" "$SKEL/lxqt/lxqt.conf"
         sed -i "s/^Theme=.*/Theme=$i/"           "$SKEL/kdeglobals"
@@ -706,14 +707,15 @@ if [ -n "$sddm_theme" ]; then
     fi
 fi
 
-# Desktop wallpaper: reuse whatever MX artwork this build ships.
+# Desktop wallpaper: the MX 25 default, which is also the image the SDDM
+# monochrome theme uses as its own background (see its theme.conf).
 wp=""
-for d in "$ROOT"/usr/share/backgrounds "$ROOT"/usr/share/wallpapers; do
-    [ -d "$d" ] || continue
-    wp=$(find "$d" -maxdepth 2 -type f \( -iname '*.jpg' -o -iname '*.png' \) \
-         -printf '%s %p\n' 2>/dev/null | sort -rn | head -n1 | cut -d' ' -f2-)
-    [ -n "$wp" ] && break
+for c in /usr/share/backgrounds/default25.png /usr/share/backgrounds/default.png; do
+    [ -f "$ROOT$c" ] && wp="$ROOT$c" && break
 done
+if [ -z "$wp" ]; then
+    wp=$(ls -S "$ROOT"/usr/share/backgrounds/default*.png "$ROOT"/usr/share/backgrounds/*.png 2>/dev/null | head -n1)
+fi
 if [ -n "$wp" ]; then
     sed -i "s|^Wallpaper=.*|Wallpaper=${wp#$ROOT}|" "$SKEL/pcmanfm-qt/lxqt/settings.conf"
     echo "theme.sh: wallpaper set to ${wp#$ROOT}"

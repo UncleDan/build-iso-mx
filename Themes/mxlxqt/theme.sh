@@ -47,7 +47,7 @@ echo "theme.sh: Qt widget style set to $style"
 
 # Icon theme: KDE first, MX Papirus as fallback. Written to both the LXQt
 # config and kdeglobals so KF6 applications agree with the panel.
-for i in Papirus-mxblue Papirus-Dark Papirus breeze-dark breeze; do
+for i in Papirus-mxbluedark Papirus-Dark Papirus-mxblue Papirus breeze-dark; do
     if [ -d "$ROOT/usr/share/icons/$i" ]; then
         sed -i "s/^icon_theme=.*/icon_theme=$i/" "$SKEL/lxqt/lxqt.conf"
         sed -i "s/^Theme=.*/Theme=$i/"           "$SKEL/kdeglobals"
@@ -129,14 +129,15 @@ if [ -n "$sddm_theme" ]; then
     fi
 fi
 
-# Desktop wallpaper: reuse whatever MX artwork this build ships.
+# Desktop wallpaper: the MX 25 default, which is also the image the SDDM
+# monochrome theme uses as its own background (see its theme.conf).
 wp=""
-for d in "$ROOT"/usr/share/backgrounds "$ROOT"/usr/share/wallpapers; do
-    [ -d "$d" ] || continue
-    wp=$(find "$d" -maxdepth 2 -type f \( -iname '*.jpg' -o -iname '*.png' \) \
-         -printf '%s %p\n' 2>/dev/null | sort -rn | head -n1 | cut -d' ' -f2-)
-    [ -n "$wp" ] && break
+for c in /usr/share/backgrounds/default25.png /usr/share/backgrounds/default.png; do
+    [ -f "$ROOT$c" ] && wp="$ROOT$c" && break
 done
+if [ -z "$wp" ]; then
+    wp=$(ls -S "$ROOT"/usr/share/backgrounds/default*.png "$ROOT"/usr/share/backgrounds/*.png 2>/dev/null | head -n1)
+fi
 if [ -n "$wp" ]; then
     sed -i "s|^Wallpaper=.*|Wallpaper=${wp#$ROOT}|" "$SKEL/pcmanfm-qt/lxqt/settings.conf"
     echo "theme.sh: wallpaper set to ${wp#$ROOT}"

@@ -455,12 +455,19 @@ is no `mx-apps-lxqt`.
 * **`pesky-package.list` installs, it does not block.** Part 7 of the chroot
   stage runs `apt-get install` on every name in that file: it exists for
   packages that must be installed *late*, so their config files are not
-  overwritten. The KDE list carries `desktop-defaults-mx-kde` for that reason;
-  left in place here it installed MX's KDE defaults and pulled Plasma back in
-  with them, which is how `plasma.desktop` reappeared in the SDDM session list
-  — selectable, and fatal when selected. There is no LXQt counterpart, so the
-  line is removed, and the Plasma session files are listed in
-  `delete-files.list` as a second line of defence.
+  overwritten. Removing `desktop-defaults-mx-kde` from it looked right and was
+  wrong: despite the name it is a config-only package, and it is what ships
+  `/usr/share/sddm/themes/monochrome`, the theme `sddm.conf` selects. Without
+  it the login screen falls back to SDDM's bare default. It stays. The Plasma
+  session entries are dealt with separately, in `delete-files.list`.
+* **The wallpaper is `/usr/share/backgrounds/default25.png`**, not "the largest
+  file in that directory". It is also what the monochrome SDDM theme uses as
+  its own background, so login and desktop show the same image, as in the KDE
+  edition.
+* **`Papirus-mxblue` is an overlay, not a full icon theme** — about thirty
+  files that inherit the rest from Papirus. Used directly under LXQt it leaves
+  gaps in the panel. The dark variant `Papirus-mxbluedark` is the one to point
+  at on a dark panel.
 * **The panel needs an explicit `panel.conf`.** Without one, lxqt-panel builds
   a default panel whose main-menu button looks for an icon that is not in the
   icon theme, so the button renders empty. `/etc/skel/.config/lxqt/panel.conf`
